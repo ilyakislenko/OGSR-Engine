@@ -437,6 +437,7 @@ CRenderTarget::CRenderTarget()
     }
 
     s_puddles.create("effects_water_puddles");
+    s_portal_gun.create("effects_portal_gun"); // portal-mod: gamedata/shaders/r3/effects_portal_gun.s
 
     // Build textures
     {

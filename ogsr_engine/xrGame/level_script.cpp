@@ -35,6 +35,67 @@
 #include "GamePersistent.h"
 #include "EffectorBobbing.h"
 #include "LevelDebugScript.h"
+#include "CharacterPhysicsSupport.h" // portal-mod
+#include "PHMovementControl.h"
+
+// portal-mod: Lua side of the Portal 2 portals and the actor's velocity (momentum through portals)
+static void portal_set(int idx, Fvector pos, Fvector normal, Fvector up, float w, float h, float color, bool linked, float open)
+{
+    if (idx < 0 || idx > 1)
+        return;
+    Fvector n = normal, u = up, r;
+    n.normalize_safe();
+    u.normalize_safe();
+    r.crossproduct(u, n).normalize_safe();
+    PORTAL_MOD_DRAW& p = portal_mod_draw[idx];
+    p.xform.identity();
+    p.xform.i.mul(r, w * 0.5f);
+    p.xform.j.mul(u, h * 0.5f);
+    p.xform.k.set(n);
+    p.xform.c.mad(pos, n, 0.012f); // a centimetre off the wall: no z-fighting
+    p.params.set(color, linked ? 1.f : 0.f, open, 0.f);
+    p.on = true;
+}
+
+static void portal_clear(int idx)
+{
+    if (idx >= 0 && idx <= 1)
+        portal_mod_draw[idx].on = false;
+}
+
+// Normal of the static triangle a ray hits (facing the ray), or (0,0,0) if it hits nothing static.
+static Fvector ray_query_normal(Fvector start, Fvector dir, float range)
+{
+    Fvector res{};
+    collide::rq_result RQ;
+    CObject* ignore = Level().CurrentEntity();
+    if (Level().ObjectSpace.RayPick(start, dir, range, collide::rqtStatic, RQ, ignore) && !RQ.O)
+    {
+        const CDB::TRI& t = Level().ObjectSpace.GetStaticTris()[RQ.element];
+        const Fvector* v = Level().ObjectSpace.GetStaticVerts();
+        Fvector e1, e2;
+        e1.sub(v[t.verts[1]], v[t.verts[0]]);
+        e2.sub(v[t.verts[2]], v[t.verts[0]]);
+        res.crossproduct(e1, e2).normalize_safe();
+        if (res.dotproduct(dir) > 0.f)
+            res.invert();
+    }
+    return res;
+}
+
+static Fvector actor_velocity()
+{
+    Fvector v{};
+    if (CActor* a = Actor())
+        v.set(a->character_physics_support()->movement()->GetVelocity());
+    return v;
+}
+
+static void set_actor_velocity(Fvector v)
+{
+    if (CActor* a = Actor())
+        a->character_physics_support()->movement()->SetVelocity(v);
+}
 
 using namespace luabind;
 
@@ -1123,6 +1184,9 @@ void CLevel::script_register(lua_State* L)
             def("vertex_id", ((u32(*)(const Fvector&)) & vertex_id)), def("vertex_id", ((u32(*)(u32, const Fvector&)) & vertex_id)), def("nearest_vertex_id", &nearest_vertex_id),
 
             def("advance_game_time", &AdvanceGameTime),
+
+            def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("ray_query_normal", &ray_query_normal), // portal-mod
+            def("actor_velocity", &actor_velocity), def("set_actor_velocity", &set_actor_velocity),
 
             def("get_target_dist", &GetTargetDist), def("get_target_obj", &GetTargetObj), def("get_current_ray_query", &GetCurrentRayQuery),
             //

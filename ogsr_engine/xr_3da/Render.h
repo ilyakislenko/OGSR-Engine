@@ -372,6 +372,15 @@ struct GRASS_SHADER_DATA_OLD
 ENGINE_API extern GRASS_SHADER_DATA grass_shader_data;
 ENGINE_API extern GRASS_SHADER_DATA_OLD grass_shader_data_old;
 
+// portal-mod: Portal 2 portals drawn by the renderer's forward pass; filled from Lua (level.portal_set/portal_clear)
+struct PORTAL_MOD_DRAW
+{
+    bool on{};
+    Fmatrix xform{}; // i = right * half width, j = up * half height, k = surface normal, c = centre
+    Fvector4 params{}; // x: 0 blue / 1 orange, y: 1 = linked (shows the other side), z: open 0..1, w: reserved
+};
+ENGINE_API extern PORTAL_MOD_DRAW portal_mod_draw[2];
+
 extern Fvector4 ps_ssfx_grass_interactive;
 extern Fvector4 ps_ssfx_int_grass_params_2;
 extern Fvector4 ps_ssfx_hud_drops_1, ps_ssfx_hud_drops_2, ps_ssfx_hud_drops_1_cfg, ps_ssfx_hud_drops_2_cfg;

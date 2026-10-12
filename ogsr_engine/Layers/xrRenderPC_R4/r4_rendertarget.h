@@ -101,6 +101,7 @@ public:
     ref_texture t_noise[TEX_jitter_count];
 
     ref_shader s_puddles;
+    ref_shader s_portal_gun; // portal-mod
 
 private:
     // OCCq

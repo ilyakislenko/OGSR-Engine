@@ -578,6 +578,19 @@ void CRender::render_forward()
             }
         }
 
+        // portal-mod: Portal 2 portals (xr_3da/Render.h portal_mod_draw, set from Lua by level.portal_set)
+        for (const auto& portal : portal_mod_draw)
+        {
+            if (!portal.on || !ViewBase.testSphere_dirty(portal.xform.c, std::max(portal.xform.i.magnitude(), portal.xform.j.magnitude())))
+                continue;
+
+            cmd_list.set_Shader(Target->s_portal_gun);
+            cmd_list.set_xform_world(portal.xform);
+            cmd_list.set_c("portal_params", portal.params.x, portal.params.y, portal.params.z, portal.params.w);
+
+            cmd_list.Render(6);
+        }
+
         dsgraph.r_dsgraph_render_graph(1); // normal level, secondary priority
         dsgraph.PortalTraverser.fade_render(cmd_list); // faded-portals
         dsgraph.r_dsgraph_render_sorted(); // strict-sorted geoms
