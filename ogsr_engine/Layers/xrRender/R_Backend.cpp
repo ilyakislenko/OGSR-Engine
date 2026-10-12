@@ -12,7 +12,8 @@ CBackend::CBackend()
     Invalidate();
 }
 
-constexpr class IndexBufferGen
+// portal-mod: runtime init; MSVC 17.14 hits its constexpr step limit building 24k indices at compile time
+static class IndexBufferGen
 {
     static constexpr size_t dwTriCount{4 * 1024};
     static constexpr size_t dwIdxCount{dwTriCount * 2 * 3};
@@ -23,7 +24,7 @@ constexpr class IndexBufferGen
 public:
     u16 Indices[dwIdxCount]{};
 
-    consteval IndexBufferGen()
+    IndexBufferGen()
     {
         for (size_t i{}; i < dwTriCount; i++)
         {

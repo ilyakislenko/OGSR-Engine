@@ -26,7 +26,7 @@ IC void dx10ConstantBuffer::set(R_constant* C, R_constant_load& L, const T& A)
     else if constexpr (std::is_same_v<T, bool>)
         CBUF_ASSERT(RC_bool == C->type);
     else
-        static_assert(false, "something strange with arg typename!");
+        static_assert(sizeof(T) == 0, "something strange with arg typename!"); // dependent false: MSVC 17.14 + C++20 evaluates static_assert(false) at definition
 
     if constexpr (std::is_same_v<T, Fmatrix>)
     {
@@ -81,7 +81,7 @@ IC void dx10ConstantBuffer::seta(R_constant* C, R_constant_load& L, const u32 e,
     if constexpr (std::is_same_v<T, Fvector2> || std::is_same_v<T, Fvector3> || std::is_same_v<T, Fvector4> || std::is_same_v<T, Fmatrix>)
         CBUF_ASSERT(RC_float == C->type);
     else
-        static_assert(false, "something strange with arg typename!");
+        static_assert(sizeof(T) == 0, "something strange with arg typename!"); // dependent false: MSVC 17.14 + C++20 evaluates static_assert(false) at definition
 
     if constexpr (std::is_same_v<T, Fmatrix>)
     {
