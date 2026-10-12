@@ -349,10 +349,10 @@ void CRender::Render()
         cmd_list.set_Stencil(FALSE);
 
         if (portal_mod_pass) // portal-mod E2: sky dome with the standard projection
-            portal_mod_projection(true);
+            portal_mod_projection(true, &cmd_list); // portal-mod E6: this context only
         g_pGamePersistent->Environment().RenderSky(cmd_list);
         if (portal_mod_pass)
-            portal_mod_projection(false);
+            portal_mod_projection(false, &cmd_list);
     }
 
     const Fcolor& sun_color = smart_cast<light*>(Lights.sun_adapted._get())->color;
@@ -623,8 +623,13 @@ static void portal_mod_make_oblique(Fmatrix& P, const Fvector4& C)
     P._43 = C.w * s;
 }
 
-void CRender::portal_mod_projection(bool standard)
+void CRender::portal_mod_projection(bool standard, CBackend* only)
 {
+    if (only) // portal-mod E6: mid-pass, other contexts may be drawing on worker threads right now
+    {
+        only->set_xform_project(standard ? portal_mod_P_std : portal_mod_P_obl);
+        return;
+    }
     Device.mProject.set(standard ? portal_mod_P_std : portal_mod_P_obl);
     Device.mFullTransform.mul(Device.mProject, Device.mView);
     Device.mInvFullTransform.invert_44(Device.mFullTransform);

@@ -25,10 +25,10 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
         PIX_EVENT(CLOUDS_RENDER);
 
         if (portal_mod_pass) // portal-mod E2: the cloud dome would be clipped by the oblique projection
-            RImplementation.portal_mod_projection(true);
+            RImplementation.portal_mod_projection(true, &cmd_list); // portal-mod E6: this context only
         g_pGamePersistent->Environment().RenderClouds(cmd_list);
         if (portal_mod_pass)
-            RImplementation.portal_mod_projection(false);
+            RImplementation.portal_mod_projection(false, &cmd_list);
     }
 
     cmd_list.set_Stencil(TRUE, D3DCMP_LESSEQUAL, 0x01, 0xff, 0x00); // stencil should be >= 1
