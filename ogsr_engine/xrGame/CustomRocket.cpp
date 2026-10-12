@@ -443,7 +443,11 @@ void CCustomRocket::UpdateEnginePh()
     float k_back = 1.f;
     Fvector l_pos, l_dir;
     l_pos.set(0, 0, -2.f);
-    l_dir.set(XFORM().k);
+    { // portal-mod E4: thrust along the body as it is now (XFORM() lags a frame; after a portal it points the old way)
+        Fmatrix body;
+        m_pPhysicsShell->GetGlobalTransformDynamic(&body);
+        l_dir.set(body.k);
+    }
 
     l_dir.normalize();
     m_pPhysicsShell->applyImpulse(l_dir, (1.f + k_back) * force);

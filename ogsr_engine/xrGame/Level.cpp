@@ -32,6 +32,13 @@
 #include "../xr_3da/cameramanager.h"
 #include "level_sounds.h"
 #include "car.h"
+#include "portal_mod.h" // portal-mod E4
+#include "PHShell.h"
+#include "PHObject.h"
+#include "Geometry.h"
+#include "ExtendedGeom.h"
+#include "PhysicsShellHolder.h"
+#include "entity_alive.h"
 #include "trade_parameters.h"
 #include "clsid_game.h"
 #include "MainMenu.h"
@@ -704,7 +711,119 @@ void CLevel::OnEvent(EVENT E, u64 P1, u64 /**P2/**/)
         return;
 }
 
-void CLevel::PhisStepsCallback(u32, u32) {}
+// portal-mod E4: physics bodies through portals (grenades, rockets, bolts, dropped items, ragdolls). Runs after every
+// physics step (0.01 s) on the physics thread: a body that would reach a portal's oval within the next steps leaves
+// the other portal with its velocities turned the same way, before it can touch the wall behind the portal.
+static void portal_mod_teleport_shell(CPhysicsShell* shell, const portal_mod::Frame& A, const portal_mod::Frame& B, float push,
+                                      const Fvector& shift) // portal-mod E7: funnelling moves the entry point by `shift`
+{
+    using namespace portal_mod;
+    Fmatrix form;
+    form.identity();
+    form.i = map_dir(A, B, Fvector().set(1.f, 0.f, 0.f));
+    form.j = map_dir(A, B, Fvector().set(0.f, 1.f, 0.f));
+    form.k = map_dir(A, B, Fvector().set(0.f, 0.f, 1.f));
+    form.c = map_point(A, B, Fvector().set(0.f, 0.f, 0.f));
+    form.c.mad(B.n, push);
+    form.c.add(map_dir(A, B, shift));
+
+    ELEMENT_STORAGE& elements = shell->Elements();
+    xr_vector<std::pair<Fvector, Fvector>> vel(elements.size());
+    for (size_t e = 0; e < elements.size(); ++e)
+    {
+        elements[e]->get_LinearVel(vel[e].first);
+        elements[e]->get_AngularVel(vel[e].second);
+    }
+    shell->TransformPosition(form);
+    for (size_t e = 0; e < elements.size(); ++e)
+    {
+        CPhysicsElement* el = elements[e];
+        el->set_LinearVel(map_dir(A, B, vel[e].first));
+        el->set_AngularVel(map_dir(A, B, vel[e].second));
+        // forget where it was: rockets and grenades sweep a ray from the last position and would hit the wall
+        for (u16 g = 0; g < el->numberOfGeoms(); ++g)
+        {
+            CODEGeom* G = el->geometry(g);
+            if (!G || !G->geometry_transform())
+                continue;
+            dGeomID gid = G->geom();
+            if (!gid)
+                gid = G->geometry_transform();
+            dGeomUserDataResetLastPos(gid);
+            dGeomGetUserData(gid)->pushing_neg = false;
+            dGeomGetUserData(gid)->pushing_b_neg = false;
+            G->clear_cashed_tries();
+        }
+    }
+    shell->Enable();
+}
+
+static void portal_mod_physics_step()
+{
+    using namespace portal_mod;
+    Frame P[2];
+    if (!linked() || !get_frame(0, P[0]) || !get_frame(1, P[1]))
+        return;
+
+    static xr_vector<ISpatial*> found;
+    static xr_map<u16, u32> cooldown; // object id -> step before which it may not travel again
+    static u32 step = 0;
+    ++step;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const Frame& A = P[i];
+        const Frame& B = P[1 - i];
+        const float reach = _max(A.hw, A.hh) + 2.f;
+        found.clear();
+        g_SpatialSpacePhysic->q_box(found, 0, STYPE_PHYSIC, A.c, Fvector().set(reach, reach, reach));
+        for (ISpatial* s : found)
+        {
+            CPHObject* ph = static_cast<CPHObject*>(s);
+            if (ph->CastType() == CPHObject::tpCharacter)
+                continue;
+            CPHShell* shell = smart_cast<CPHShell*>(ph);
+            if (!shell || !shell->isActive() || !shell->isEnabled() || shell->Elements().empty())
+                continue;
+            CPhysicsShellHolder* holder = shell->get_ElementByStoreOrder(0)->PhysicsRefObject();
+            if (!holder || holder->H_Parent() || smart_cast<CEntityAlive*>(holder) || smart_cast<CCar*>(holder))
+                continue;
+            auto cd = cooldown.find(holder->ID());
+            if (cd != cooldown.end() && cd->second > step)
+                continue;
+
+            Fvector v;
+            shell->get_LinearVel(v);
+            const float vn = -v.dotproduct(A.n); // speed towards the portal
+            if (vn < 0.3f)
+                continue;
+            const Fvector& pos = s->spatial.sphere.P;
+            const float R = _min(_max(s->spatial.sphere.R, 0.05f), 1.f);
+            const float d = Fvector().sub(pos, A.c).dotproduct(A.n);
+            if (d < -R || d - R > vn * fixed_step * 3.f + 0.05f)
+                continue; // behind it, or not there within the next steps
+            Fvector q;
+            q.mad(pos, v, _max(d, 0.f) / vn).sub(A.c); // where it meets the portal plane
+            // portal-mod E7: up to FUNNEL metres outside the oval it is pulled in (Portal 2 funnelling)
+            constexpr float FUNNEL = 0.35f;
+            const float qx = q.dotproduct(A.r), qy = q.dotproduct(A.u);
+            const float fx = qx / (A.hw + FUNNEL), fy = qy / (A.hh + FUNNEL);
+            if (fx * fx + fy * fy > 1.f)
+                continue;
+            const float x = qx / A.hw, y = qy / A.hh, r = _sqrt(x * x + y * y);
+            Fvector shift{};
+            if (r > 0.8f)
+                shift.mul(A.r, (x * 0.8f / r - x) * A.hw).mad(A.u, (y * 0.8f / r - y) * A.hh);
+
+            portal_mod_teleport_shell(shell, A, B, _max(d, 0.f) + R + 0.05f, shift);
+            cooldown[holder->ID()] = step + 20;
+            Msg("[portal_mod] %s went through portal %d at %.1f m/s%s", holder->cName().c_str(), i, v.magnitude(),
+                r > 1.f ? " (funnelled)" : "");
+        }
+    }
+}
+
+void CLevel::PhisStepsCallback(u32, u32) { portal_mod_physics_step(); }
 
 ALife::_TIME_ID CLevel::GetGameTime()
 {

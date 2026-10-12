@@ -40,6 +40,7 @@ void SBullet::Init(const Fvector& position, const Fvector& direction, float star
 
     max_dist = maximum_distance * cartridge.m_kDist;
     fly_dist = 0;
+    portal_dist = FLT_MAX; // portal-mod E4
 
     parent_id = sender_id;
     flags.allow_sendhit = SendHit;
@@ -156,6 +157,9 @@ SBullet& CBulletManager::AddBullet(const Fvector& position, const Fvector& direc
     return bullet;
 }
 
+#include <atomic>
+static std::atomic<u32> portal_mod_bullets{0}; // portal-mod E5: crossings since the last frame
+
 void CBulletManager::UpdateWorkload()
 {
     u32 delta_time = Device.dwTimeDelta + m_dwTimeRemainder;
@@ -217,14 +221,47 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
 
     bullet->flags.ricochet_was = 0;
 
-    collide::ray_defs RD(bullet->pos, bullet->dir, range, CDB::OPT_CULL, collide::rqtBoth);
+    // portal-mod E4: a portal on the way? Trace only up to its plane; if nothing is hit before it, go through.
+    int portal_in = -1;
+    if (m_portals_linked)
+    {
+        for (int i = 0; i < 2 && portal_in < 0; ++i)
+        {
+            float t;
+            if (portal_mod::crosses(m_pf[i], bullet->pos, bullet->dir, range, t))
+            {
+                portal_in = i;
+                range = t;
+            }
+        }
+    }
+
     BOOL result = FALSE;
-    VERIFY(!fis_zero(RD.dir.square_magnitude()));
-    result = Level().ObjectSpace.RayQuery(rq_storage, RD, firetrace_callback, &bullet_data, test_callback, NULL);
+    if (range > EPS_L)
+    {
+        collide::ray_defs RD(bullet->pos, bullet->dir, range, CDB::OPT_CULL, collide::rqtBoth);
+        VERIFY(!fis_zero(RD.dir.square_magnitude()));
+        result = Level().ObjectSpace.RayQuery(rq_storage, RD, firetrace_callback, &bullet_data, test_callback, NULL);
+    }
 
     if (result && bullet_data.bStopTracing)
     {
         range = (rq_storage.r_begin() + rq_storage.r_count() - 1)->range;
+    }
+    else if (portal_in >= 0 && !bullet->flags.ricochet_was) // portal-mod E4: through the portal
+    {
+        const portal_mod::Frame& A = m_pf[portal_in];
+        const portal_mod::Frame& B = m_pf[1 - portal_in];
+        Fvector at;
+        at.mad(bullet->pos, cur_dir, range);
+        bullet->fly_dist += range;
+        bullet->dir = portal_mod::map_dir(A, B, cur_dir);
+        bullet->pos = portal_mod::map_point(A, B, at);
+        bullet->pos.mad(bullet->dir, 0.02f);
+        cur_dir = bullet->dir;
+        bullet->portal_dist = 0.f;
+        portal_mod_bullets.fetch_add(1, std::memory_order_relaxed); // portal-mod E5
+        range = 0.f;
     }
     range = std::max(EPS_L, range);
 
@@ -235,6 +272,7 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
         //изменить положение пули
         bullet->pos.mad(bullet->pos, cur_dir, range);
         bullet->fly_dist += range;
+        bullet->portal_dist += range; // portal-mod E4
 
         if (bullet->fly_dist >= bullet->max_dist)
             return false;
@@ -349,6 +387,10 @@ void CBulletManager::Render()
 
         if (length > m_fTracerLengthMax)
             length = m_fTracerLengthMax;
+        if (length > bullet.portal_dist) // portal-mod E4: no tracer sticking out of the wall behind the exit portal
+            length = bullet.portal_dist;
+        if (length < m_fTracerLengthMin)
+            continue;
 
         float width = m_fTracerWidth;
         float dist2segSqr = SqrDistancePointToSegment(Device.vCameraPosition, bullet.pos, Fvector().mul(bullet.dir, length));
@@ -397,6 +439,10 @@ void CBulletManager::Render()
 void CBulletManager::CommitRenderSet() // @ the end of frame
 {
     m_BulletsRendered = m_Bullets;
+    // portal-mod E4: the worker thread reads the portals from here, not from what Lua may change meanwhile
+    m_portals_linked = portal_mod::linked() && portal_mod::get_frame(0, m_pf[0]) && portal_mod::get_frame(1, m_pf[1]);
+    if (const u32 n = portal_mod_bullets.exchange(0)) // portal-mod E5
+        Msg("[portal_mod] %u bullet(s) went through a portal", n);
     // Msg("!![%s] size of m_BulletsRendered: [%u], m_Bullets: [%u], m_events: [%u]", __FUNCTION__, m_BulletsRendered.size(), m_Bullets.size(), m_Events.size());
     if (g_mt_config.test(mtBullets))
         Device.add_to_seq_parallel(fastdelegate::MakeDelegate(this, &CBulletManager::UpdateWorkload));

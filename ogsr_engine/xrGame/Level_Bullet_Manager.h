@@ -6,6 +6,7 @@
 
 #include "weaponammo.h"
 #include "tracer.h"
+#include "portal_mod.h" // portal-mod E4
 //структура, описывающая пулю и ее свойства в полете
 struct SBullet
 {
@@ -34,6 +35,7 @@ struct SBullet
     u16 weapon_id; // ID оружия из которого была выпущены пуля
 
     float fly_dist; //дистанция которую пуля пролетела
+    float portal_dist; // portal-mod E4: metres since the bullet last came out of a portal (clips the tracer)
 
     //коэфициенты и параметры патрона
     float hit_power; // power*cartridge
@@ -114,6 +116,8 @@ protected:
 
     BulletVec m_Bullets; // working set, locked
     BulletVec m_BulletsRendered; // copy for rendering
+    portal_mod::Frame m_pf[2]; // portal-mod E4: portals as of this frame, for the worker thread
+    bool m_portals_linked{};
     xr_vector<_event> m_Events;
 
     //остаток времени, который не был учтен на предыдущем кадре
