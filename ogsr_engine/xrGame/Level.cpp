@@ -39,6 +39,11 @@
 #include "ExtendedGeom.h"
 #include "PhysicsShellHolder.h"
 #include "entity_alive.h"
+#include "CustomMonster.h" // portal-mod E8
+#include "CharacterPhysicsSupport.h"
+#include "PHMovementControl.h"
+#include "movement_manager.h"
+#include "detail_path_manager.h"
 #include "trade_parameters.h"
 #include "clsid_game.h"
 #include "MainMenu.h"
@@ -381,6 +386,8 @@ void CLevel::ProcessGameEvents()
         Device.add_to_seq_parallel(fastdelegate::MakeDelegate(this, &CLevel::ProcessGameSpawns));
 }
 
+static void portal_mod_npc_frame(); // portal-mod E8
+
 void CLevel::OnFrame()
 {
     m_feel_deny.update();
@@ -393,6 +400,8 @@ void CLevel::OnFrame()
     ClientReceive();
 
     ProcessGameEvents();
+
+    portal_mod_npc_frame(); // portal-mod E8
 
     MapManager().Update();
     // Inherited update
@@ -783,24 +792,57 @@ static void portal_mod_physics_step()
             if (ph->CastType() == CPHObject::tpCharacter)
                 continue;
             CPHShell* shell = smart_cast<CPHShell*>(ph);
-            if (!shell || !shell->isActive() || !shell->isEnabled() || shell->Elements().empty())
+            if (!shell || !shell->isActive() || shell->Elements().empty())
                 continue;
             CPhysicsShellHolder* holder = shell->get_ElementByStoreOrder(0)->PhysicsRefObject();
-            if (!holder || holder->H_Parent() || smart_cast<CEntityAlive*>(holder) || smart_cast<CCar*>(holder))
+            if (!holder || holder->H_Parent() || smart_cast<CCar*>(holder))
                 continue;
+            if (const CEntityAlive* ea = smart_cast<CEntityAlive*>(holder); ea && ea->g_Alive())
+                continue; // portal-mod E8: living ones go in portal_mod_npc_frame, corpses (ragdolls) here
             auto cd = cooldown.find(holder->ID());
             if (cd != cooldown.end() && cd->second > step)
                 continue;
 
             Fvector v;
             shell->get_LinearVel(v);
-            const float vn = -v.dotproduct(A.n); // speed towards the portal
-            if (vn < 0.3f)
-                continue;
+            float vn = -v.dotproduct(A.n); // speed towards the portal
             const Fvector& pos = s->spatial.sphere.P;
             const float R = _min(_max(s->spatial.sphere.R, 0.05f), 1.f);
             const float d = Fvector().sub(pos, A.c).dotproduct(A.n);
-            if (d < -R || d - R > vn * fixed_step * 3.f + 0.05f)
+            // portal-mod E8: lying on (or sliding over) a floor portal -> falls in at 2 m/s
+            bool fell = false; // portal-mod E9: any part of the body over the oval will do (a ragdoll lies across it)
+            if (A.n.y > 0.7f && vn < 2.f && d > -0.05f && d < R + 0.15f)
+            {
+                for (CPhysicsElement* el : shell->Elements())
+                {
+                    Fmatrix m;
+                    el->GetGlobalTransformDynamic(&m);
+                    Fvector q;
+                    q.sub(m.c, A.c);
+                    const float x = q.dotproduct(A.r) / A.hw, y = q.dotproduct(A.u) / A.hh, h = q.dotproduct(A.n);
+                    if (h > -0.1f && h < 0.6f && x * x + y * y < 0.85f * 0.85f)
+                    {
+                        fell = true;
+                        break;
+                    }
+                }
+                if (fell)
+                {
+                    const Fvector add = Fvector().mul(A.n, vn - 2.f);
+                    for (CPhysicsElement* el : shell->Elements())
+                    {
+                        Fvector ev;
+                        el->get_LinearVel(ev);
+                        el->set_LinearVel(ev.add(add));
+                    }
+                    v.add(add);
+                    vn = 2.f;
+                    shell->Enable();
+                }
+            }
+            if (vn < 0.3f || !shell->isEnabled())
+                continue;
+            if (!fell && (d < -R || d - R > vn * fixed_step * 3.f + 0.05f))
                 continue; // behind it, or not there within the next steps
             Fvector q;
             q.mad(pos, v, _max(d, 0.f) / vn).sub(A.c); // where it meets the portal plane
@@ -808,11 +850,11 @@ static void portal_mod_physics_step()
             constexpr float FUNNEL = 0.35f;
             const float qx = q.dotproduct(A.r), qy = q.dotproduct(A.u);
             const float fx = qx / (A.hw + FUNNEL), fy = qy / (A.hh + FUNNEL);
-            if (fx * fx + fy * fy > 1.f)
+            if (!fell && fx * fx + fy * fy > 1.f)
                 continue;
             const float x = qx / A.hw, y = qy / A.hh, r = _sqrt(x * x + y * y);
             Fvector shift{};
-            if (r > 0.8f)
+            if (!fell && r > 0.8f)
                 shift.mul(A.r, (x * 0.8f / r - x) * A.hw).mad(A.u, (y * 0.8f / r - y) * A.hh);
 
             portal_mod_teleport_shell(shell, A, B, _max(d, 0.f) + R + 0.05f, shift);
@@ -824,6 +866,114 @@ static void portal_mod_physics_step()
 }
 
 void CLevel::PhisStepsCallback(u32, u32) { portal_mod_physics_step(); }
+
+// portal-mod E8: living NPCs and monsters through portals. Main thread: the AI's position, path and physics character
+// move together (as script set_npc_position does).
+static void portal_mod_npc_frame()
+{
+    using namespace portal_mod;
+    Frame P[2];
+    if (!linked() || !get_frame(0, P[0]) || !get_frame(1, P[1]))
+        return;
+
+    static xr_vector<CObject*> near_objects;
+    static xr_map<u16, u32> cooldown; // object id -> time before which it may not travel again
+    const u32 now = Device.dwTimeGlobal;
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const Frame& A = P[i];
+        const Frame& B = P[1 - i];
+        near_objects.clear();
+        Level().ObjectSpace.GetNearest(near_objects, A.c, _max(A.hw, A.hh) + 2.5f, nullptr);
+        for (CObject* o : near_objects)
+        {
+            CCustomMonster* m = smart_cast<CCustomMonster*>(o);
+            if (!m || !m->g_Alive() || m->H_Parent() || !m->character_physics_support())
+                continue;
+            CPHMovementControl* mc = m->character_physics_support()->movement();
+            if (!mc || !mc->CharacterExist())
+                continue;
+            auto cd = cooldown.find(m->ID());
+            if (cd != cooldown.end() && cd->second > now)
+                continue;
+
+            Fvector v;
+            mc->GetCharacterVelocity(v);
+            const Fvector feet = m->Position();
+            const float H = _max(mc->Box().y2 - mc->Box().y1, 0.4f); // body height
+            const float fr = _max(mc->FootRadius(), 0.2f);
+            Fvector v_in;
+            if (A.n.y > 0.7f)
+            {
+                // floor portal: standing on it (feet inside the oval, room for the body) -> falls in
+                Fvector q;
+                q.sub(feet, A.c);
+                const float d = q.dotproduct(A.n);
+                const float x = q.dotproduct(A.r) / A.hw, y = q.dotproduct(A.u) / A.hh;
+                if (d < -0.3f || d > 0.4f || x * x + y * y > 0.75f * 0.75f)
+                    continue;
+                const float down = -v.dotproduct(A.n);
+                v_in.mad(v, A.n, down).mad(A.n, -_max(down, 2.5f)); // keep the sideways part, at least 2.5 m/s down
+            }
+            else
+            {
+                // wall or ceiling portal: the body's middle goes in
+                Fvector c;
+                c.mad(feet, Fvector().set(0.f, 1.f, 0.f), H * 0.5f);
+                const float vn = -v.dotproduct(A.n);
+                if (vn < 0.5f)
+                    continue;
+                const float d = Fvector().sub(c, A.c).dotproduct(A.n);
+                if (d < -fr || d - fr > vn * _max(Device.fTimeDelta, 0.01f) * 2.f + 0.1f)
+                    continue;
+                Fvector q;
+                q.mad(c, v, _max(d, 0.f) / vn).sub(A.c);
+                const float x = q.dotproduct(A.r) / A.hw, y = q.dotproduct(A.u) / A.hh;
+                if (x * x + y * y > 1.f)
+                    continue;
+                v_in.set(v);
+            }
+
+            // out of B: upright, clear of its surface, moving away from it
+            Fvector v_out = map_dir(A, B, v_in);
+            Fvector out;
+            float away;
+            if (B.n.y > 0.7f) // floor: stands on it and pops up
+            {
+                out.mad(B.c, B.n, 0.05f);
+                away = 3.5f;
+            }
+            else if (B.n.y < -0.7f) // ceiling: hangs below it and drops
+            {
+                out.set(B.c.x, B.c.y - H - 0.15f, B.c.z);
+                away = 0.5f;
+            }
+            else // wall: on its feet in the oval's middle, in front of it
+            {
+                out.mad(B.c, B.n, fr + 0.25f);
+                out.y -= _min(H * 0.5f, B.hh - 0.05f);
+                away = 1.5f;
+            }
+            const float vb = v_out.dotproduct(B.n);
+            if (vb < away)
+                v_out.mad(B.n, away - vb);
+
+            Fmatrix F = m->XFORM();
+            F.c = out;
+            m->XFORM().set(F);
+            mc->EnableCharacter(); // portal-mod E9: a sleeping character would leave the NPC hanging in the air
+            mc->SetPosition(out);
+            mc->SetVelocity(v_out);
+            m->movement().detail().make_inactual();
+            if (m->animation_movement_controlled())
+                m->destroy_anim_mov_ctrl();
+            cooldown[m->ID()] = now + 400;
+            Msg("[portal_mod] %s went through portal %d at %.1f m/s (npc), out at %.1f m/s", m->cName().c_str(), i,
+                v_in.magnitude(), v_out.magnitude());
+        }
+    }
+}
 
 ALife::_TIME_ID CLevel::GetGameTime()
 {
