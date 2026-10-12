@@ -1759,6 +1759,14 @@ void CWeaponMagazined::net_Export(CSE_Abstract* E)
 
 void CWeaponMagazined::GetBriefInfo(xr_string& str_name, xr_string& icon_sect_name, xr_string& str_count)
 {
+    if (pSettings->line_exist(cNameSect(), "portal_mod_brief")) // portal-mod E3: a weapon without ammo (the portal gun)
+    {
+        str_name = NameShort();
+        icon_sect_name = *cNameSect();
+        str_count = pSettings->r_string(cNameSect(), "portal_mod_brief");
+        return;
+    }
+
     const int AE = GetAmmoElapsed(), AC = GetAmmoCurrent();
 
     if (AE == 0 || m_magazine.empty())
