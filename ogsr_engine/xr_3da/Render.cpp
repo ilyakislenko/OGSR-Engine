@@ -13,3 +13,5 @@ ENGINE_API ShExports shader_exports{};
 ENGINE_API GRASS_SHADER_DATA grass_shader_data{};
 ENGINE_API GRASS_SHADER_DATA_OLD grass_shader_data_old{};
 ENGINE_API PORTAL_MOD_DRAW portal_mod_draw[2]{}; // portal-mod
+ENGINE_API bool portal_mod_pass{}; // portal-mod E2
+ENGINE_API Fmatrix portal_mod_full_std{};

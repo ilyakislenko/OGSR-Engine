@@ -221,6 +221,7 @@ public:
     // Main
     virtual void Calculate() = 0;
     virtual void Render() = 0;
+    virtual void RenderPortalView(const Fvector& pos, const Fvector& dir, const Fvector& top, const Fplane& clip) {} // portal-mod E2
     virtual void AfterWorldRender() = 0; //После рендеринга мира (перед UI ПДА)
     virtual void AfterUIRender() = 0; //После рендеринга UI. Вызывать только если нам нужно отрендерить кадр для пда.
 
@@ -380,6 +381,8 @@ struct PORTAL_MOD_DRAW
     Fvector4 params{}; // x: 0 blue / 1 orange, y: 1 = linked (shows the other side), z: open 0..1, w: reserved
 };
 ENGINE_API extern PORTAL_MOD_DRAW portal_mod_draw[2];
+ENGINE_API extern bool portal_mod_pass; // portal-mod E2: true while the renderer draws the view through a portal
+ENGINE_API extern Fmatrix portal_mod_full_std; // portal-mod E2: that view's full transform without the oblique near plane
 
 extern Fvector4 ps_ssfx_grass_interactive;
 extern Fvector4 ps_ssfx_int_grass_params_2;

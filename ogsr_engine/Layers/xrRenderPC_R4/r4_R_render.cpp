@@ -59,7 +59,7 @@ void CRender::main_pass_static(R_dsgraph_structure& dsgraph)
 
     bool sectors_added = false;
 
-    if (!ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_SECTORS))
+    if (!portal_mod_pass && !ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_SECTORS)) // portal-mod E2: the portal view takes all sectors
     {
         // Detect camera-sector
         if (RESET_SECTORS_HACK || !Device.vCameraPositionSaved.similar(Device.vCameraPosition, EPS_L))
@@ -168,7 +168,7 @@ void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
     std::sort(lstRenderables.begin(), lstRenderables.end(), pred_sp_sort);
 
     // Determine visibility for dynamic part of scene
-    if (dsgraph.phase == PHASE_NORMAL)
+    if (dsgraph.phase == PHASE_NORMAL && !portal_mod_pass)
     {
         // update light-vis for current entity / actor
         CObject* O = g_pGameLevel->CurrentViewEntity();
@@ -229,7 +229,7 @@ void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
                 renderable->renderable.xform.transform_tiny(pos, v_orig.sphere.P);
                 const float distance = Device.vCameraPosition.distance_to(pos);
 
-                if (dsgraph.PortalTraverser.frame() == Device.dwFrame && distance > 15.f)
+                if (!portal_mod_pass && dsgraph.PortalTraverser.frame() == Device.dwFrame && distance > 15.f)
                 {
                     auto* sector = dsgraph.sector_portals_structure.Sectors[sector_id];
 
@@ -256,7 +256,7 @@ void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
 
     if (g_pGameLevel && g_hud)
     {
-        if (dsgraph.phase == PHASE_NORMAL)
+        if (dsgraph.phase == PHASE_NORMAL && !portal_mod_pass)
         {
             g_hud->Render_MAIN(dsgraph.context_id);
         }
@@ -290,7 +290,7 @@ void CRender::Render()
         return;
     }
 
-    if (ps_pnv_mode < 2 && (ps_r_pp_aa_mode == DLSS || ps_r_pp_aa_mode == FSR2 || ps_r_pp_aa_mode == TAA || ps_r2_ls_flags.test(R2FLAG_DBG_TAA_JITTER_ENABLE)))
+    if (!portal_mod_pass && ps_pnv_mode < 2 && (ps_r_pp_aa_mode == DLSS || ps_r_pp_aa_mode == FSR2 || ps_r_pp_aa_mode == TAA || ps_r2_ls_flags.test(R2FLAG_DBG_TAA_JITTER_ENABLE)))
     {
         // Halton sequence generator
         auto halton = [](const int index, const int base) {
@@ -348,7 +348,11 @@ void CRender::Render()
         cmd_list.set_CullMode(CULL_NONE);
         cmd_list.set_Stencil(FALSE);
 
+        if (portal_mod_pass) // portal-mod E2: sky dome with the standard projection
+            portal_mod_projection(true);
         g_pGamePersistent->Environment().RenderSky(cmd_list);
+        if (portal_mod_pass)
+            portal_mod_projection(false);
     }
 
     const Fcolor& sun_color = smart_cast<light*>(Lights.sun_adapted._get())->color;
@@ -396,7 +400,8 @@ void CRender::Render()
         stats.l_total = stats.l_shadowed + stats.l_unshadowed;
 
         // perform tests
-        LP_normal.vis_prepare(cmd_list);
+        if (!portal_mod_pass) // portal-mod E2: light occlusion queries belong to the main camera
+            LP_normal.vis_prepare(cmd_list);
     }
 
     //******* Main render :: PART-1 (second)
@@ -406,7 +411,7 @@ void CRender::Render()
         // level
         Target->phase_scene_begin(cmd_list);
         dsgraph.r_dsgraph_render_lods();
-        if (Details)
+        if (Details && !portal_mod_pass)
             Details->Render(cmd_list);
         {
             {
@@ -417,7 +422,8 @@ void CRender::Render()
                 HW.get_context(cmd_list.context_id)->CopyResource(Target->rt_tempzb->pSurface, res);
                 _RELEASE(res);
             }
-            dsgraph.r_dsgraph_render_hud();
+            if (!portal_mod_pass)
+                dsgraph.r_dsgraph_render_hud();
             {
                 PIX_EVENT(copy_zbuffer_scope_depth);
 
@@ -426,7 +432,8 @@ void CRender::Render()
                 HW.get_context(cmd_list.context_id)->CopyResource(Target->rt_tempzb_dof->pSurface, res);
                 _RELEASE(res);
             }
-            dsgraph.r_dsgraph_render_hud_scope_depth();
+            if (!portal_mod_pass)
+                dsgraph.r_dsgraph_render_hud_scope_depth();
         }
     }
 
@@ -440,7 +447,7 @@ void CRender::Render()
     }
 
     // Wall marks
-    if (Wallmarks)
+    if (Wallmarks && !portal_mod_pass)
     {
         PIX_EVENT(DEFER_WALLMARKS);
 
@@ -495,7 +502,7 @@ void CRender::Render()
     }
 
     // Update incremental shadowmap-visibility solver
-    if (!Lights_LastFrame.empty() && !ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_SMAPVIS))
+    if (!portal_mod_pass && !Lights_LastFrame.empty() && !ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_SMAPVIS))
     {
         ZoneScopedN("Lights_LastFrame/flushoccq");
 
@@ -540,7 +547,8 @@ void CRender::Render()
         Details->Clear();
 
     // wait occ results for next frame lights
-    LP_normal.vis_update();
+    if (!portal_mod_pass)
+        LP_normal.vis_update();
 
     VERIFY(0 == mapDistort.size());
 }
@@ -563,7 +571,7 @@ void CRender::render_forward()
         auto& Env = g_pGamePersistent->Environment();
         Env.RenderLast(cmd_list); // rain/thunder-bolts
 
-        if (ps_r2_ls_flags_ext.test(R2FLAGEXT_SSLR) && !fis_zero(Env.wetness_factor))
+        if (!portal_mod_pass && ps_r2_ls_flags_ext.test(R2FLAGEXT_SSLR) && !fis_zero(Env.wetness_factor))
         {
             for (const auto& puddle : current_level_puddles)
             {
@@ -581,7 +589,12 @@ void CRender::render_forward()
         // portal-mod: Portal 2 portals (xr_3da/Render.h portal_mod_draw, set from Lua by level.portal_set)
         for (const auto& portal : portal_mod_draw)
         {
-            if (!portal.on || !ViewBase.testSphere_dirty(portal.xform.c, std::max(portal.xform.i.magnitude(), portal.xform.j.magnitude())))
+            if (portal_mod_pass || !portal.on || !ViewBase.testSphere_dirty(portal.xform.c, std::max(portal.xform.i.magnitude(), portal.xform.j.magnitude())))
+                continue;
+
+            Fvector to_portal; // portal-mod E2: a portal seen from behind is not there (it is on the other side of a wall)
+            to_portal.sub(portal.xform.c, Device.vCameraPosition);
+            if (to_portal.dotproduct(portal.xform.k) >= 0.f)
                 continue;
 
             cmd_list.set_Shader(Target->s_portal_gun);
@@ -595,4 +608,99 @@ void CRender::render_forward()
         dsgraph.PortalTraverser.fade_render(cmd_list); // faded-portals
         dsgraph.r_dsgraph_render_sorted(); // strict-sorted geoms
     }
+}
+
+// portal-mod E2 -------------------------------------------------------------------------------------------------------
+// Oblique near plane (Lengyel; D3D z in [0,1], row vectors). C = clip plane in view space, camera on its negative side.
+static void portal_mod_make_oblique(Fmatrix& P, const Fvector4& C)
+{
+    auto sg = [](float v) { return v > 0.f ? 1.f : (v < 0.f ? -1.f : 0.f); };
+    const float qx = sg(C.x) / P._11, qy = sg(C.y) / P._22, qz = 1.f, qw = (1.f - P._33) / P._43;
+    const float s = 1.f / (C.x * qx + C.y * qy + C.z * qz + C.w * qw);
+    P._13 = C.x * s;
+    P._23 = C.y * s;
+    P._33 = C.z * s;
+    P._43 = C.w * s;
+}
+
+void CRender::portal_mod_projection(bool standard)
+{
+    Device.mProject.set(standard ? portal_mod_P_std : portal_mod_P_obl);
+    Device.mFullTransform.mul(Device.mProject, Device.mView);
+    Device.mInvFullTransform.invert_44(Device.mFullTransform);
+    SetCacheXform(Device.mView, Device.mProject);
+}
+
+// The world seen from a virtual camera (the camera mapped through a portal) into rt_portal0, before the main frame.
+void CRender::RenderPortalView(const Fvector& pos, const Fvector& dir, const Fvector& top, const Fplane& clip)
+{
+    if (!g_pGameLevel || ShouldSkipRender() || m_bFirstFrameAfterReset)
+        return;
+
+    ZoneScoped;
+
+    // OnCameraUpdated already started the main camera's static visibility: finish it, drop it, redo it afterwards.
+    r_main.sync();
+    get_imm_context().reset();
+
+    const Fvector s_pos = Device.vCameraPosition, s_dir = Device.vCameraDirection, s_top = Device.vCameraTop, s_right = Device.vCameraRight;
+    const Fmatrix s_view = Device.mView, s_inv_view = Device.mInvView, s_proj = Device.mProject, s_full = Device.mFullTransform,
+                  s_inv_full = Device.mInvFullTransform;
+    const CFrustum s_base = ViewBase;
+
+    Device.vCameraPosition.set(pos);
+    Device.vCameraDirection.set(dir);
+    Device.vCameraTop.set(top);
+    Device.vCameraRight.crossproduct(top, dir);
+    Device.mView.build_camera_dir(pos, dir, top);
+    Device.mInvView.invert(Device.mView);
+
+    portal_mod_P_std.set(s_proj);
+    portal_mod_full_std.mul(portal_mod_P_std, Device.mView);
+    ViewBase.CreateFromMatrix(portal_mod_full_std, FRUSTUM_P_LRTB + FRUSTUM_P_FAR);
+
+    // Nothing between the virtual camera and the exit portal may show: the near plane becomes the portal plane.
+    Fvector n_view, p_world, p_view;
+    Device.mView.transform_dir(n_view, clip.n);
+    p_world.mul(clip.n, -clip.d);
+    Device.mView.transform_tiny(p_view, p_world);
+    Fvector4 C;
+    C.set(n_view.x, n_view.y, n_view.z, -n_view.dotproduct(p_view));
+    portal_mod_P_obl.set(s_proj);
+    portal_mod_make_oblique(portal_mod_P_obl, C);
+
+    portal_mod_projection(false);
+    SetCacheXformOld(Device.mView, Device.mProject);
+
+    portal_mod_pass = true;
+    r_main.calculate_static();
+    Calculate();
+    Render();
+    portal_mod_pass = false;
+
+    // The main pass must find this frame fresh: lights not added yet, accumulator and flares not cleared yet.
+    r_main.sync();
+    for (light* L : Lights.package.v_point)
+        L->frame_render = 0;
+    for (light* L : Lights.package.v_spot)
+        L->frame_render = 0;
+    for (light* L : Lights.package.v_shadowed)
+        L->frame_render = 0;
+    Target->portal_mod_reset_marks();
+    get_imm_context().reset();
+
+    Device.vCameraPosition.set(s_pos);
+    Device.vCameraDirection.set(s_dir);
+    Device.vCameraTop.set(s_top);
+    Device.vCameraRight.set(s_right);
+    Device.mView.set(s_view);
+    Device.mInvView.set(s_inv_view);
+    Device.mProject.set(s_proj);
+    Device.mFullTransform.set(s_full);
+    Device.mInvFullTransform.set(s_inv_full);
+    ViewBase = s_base;
+    SetCacheXform(Device.mView, Device.mProject);
+    SetCacheXformOld(Device.mView_old, Device.mProject_old);
+
+    r_main.calculate_static();
 }

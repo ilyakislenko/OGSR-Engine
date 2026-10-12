@@ -102,7 +102,7 @@ static class cl_fog_plane final : public R_constant_setup
     {
         // Plane
         Fvector4 plane;
-        const Fmatrix& M = Device.mFullTransform;
+        const Fmatrix& M = portal_mod_pass ? portal_mod_full_std : Device.mFullTransform; // portal-mod E2: fog from the camera, not the oblique near plane
         plane.x = -(M._14 + M._13);
         plane.y = -(M._24 + M._23);
         plane.z = -(M._34 + M._33);

@@ -428,9 +428,70 @@ extern void draw_wnds_rects();
 extern bool use_reshade;
 extern void render_reshade_effects();
 
+// portal-mod E2: render the view through the linked portal the camera looks at (xr_3da/Render.h portal_mod_draw).
+static void portal_mod_render_view()
+{
+    portal_mod_draw[0].params.w = 0.f;
+    portal_mod_draw[1].params.w = 0.f;
+    if (!portal_mod_draw[0].on || !portal_mod_draw[1].on || portal_mod_draw[0].params.y < 0.5f)
+        return;
+
+    int entry = -1;
+    float best = -2.f;
+    for (int i = 0; i < 2; ++i)
+    {
+        const Fmatrix& X = portal_mod_draw[i].xform;
+        Fvector to;
+        to.sub(X.c, Device.vCameraPosition);
+        const float dist = to.magnitude();
+        if (dist < EPS_L || to.dotproduct(X.k) >= 0.f)
+            continue; // the camera is behind this portal
+        to.div(dist);
+        const float facing = to.dotproduct(Device.vCameraDirection);
+        if (facing < 0.3f && dist > 2.5f)
+            continue; // off screen
+        if (facing > best)
+        {
+            best = facing;
+            entry = i;
+        }
+    }
+    if (entry < 0)
+        return;
+
+    const Fmatrix& A = portal_mod_draw[entry].xform;
+    const Fmatrix& B = portal_mod_draw[1 - entry].xform;
+    Fvector rA, uA, rB, uB;
+    rA.normalize(A.i);
+    uA.normalize(A.j);
+    rB.normalize(B.i);
+    uB.normalize(B.j);
+    const Fvector& nA = A.k;
+    const Fvector& nB = B.k;
+    // into A, out of B: a half turn about the portal's up axis
+    auto map_dir = [&](const Fvector& v) {
+        Fvector r;
+        r.mul(rB, -v.dotproduct(rA)).mad(uB, v.dotproduct(uA)).mad(nB, -v.dotproduct(nA));
+        return r;
+    };
+    Fvector rel;
+    rel.sub(Device.vCameraPosition, A.c);
+    Fvector pos;
+    pos.add(B.c, map_dir(rel));
+    const Fvector dir = map_dir(Device.vCameraDirection), top = map_dir(Device.vCameraTop);
+    Fvector on_plane;
+    on_plane.mad(B.c, nB, 0.03f); // a few cm in front of the exit wall, so the wall itself is cut away
+    Fplane clip;
+    clip.build(on_plane, nB);
+    Render->RenderPortalView(pos, dir, top, clip);
+    portal_mod_draw[entry].params.w = 1.f;
+}
+
 void CLevel::OnRender()
 {
     inherited::OnRender();
+
+    portal_mod_render_view(); // portal-mod E2
 
     Render->Calculate();
     Render->Render();

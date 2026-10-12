@@ -24,7 +24,11 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
     {
         PIX_EVENT(CLOUDS_RENDER);
 
+        if (portal_mod_pass) // portal-mod E2: the cloud dome would be clipped by the oblique projection
+            RImplementation.portal_mod_projection(true);
         g_pGamePersistent->Environment().RenderClouds(cmd_list);
+        if (portal_mod_pass)
+            RImplementation.portal_mod_projection(false);
     }
 
     cmd_list.set_Stencil(TRUE, D3DCMP_LESSEQUAL, 0x01, 0xff, 0x00); // stencil should be >= 1
@@ -95,7 +99,7 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
     // Copy rt_Generic_0 to new RT
     HW.get_context(cmd_list.context_id)->CopyResource(rt_Generic_0_temp->pSurface, rt_Generic_0->pSurface);
 
-    if (ps_r2_ls_flags_ext.test(R2FLAGEXT_SSLR) && !fis_zero(g_pGamePersistent->Environment().wetness_factor))
+    if (!portal_mod_pass && ps_r2_ls_flags_ext.test(R2FLAGEXT_SSLR) && !fis_zero(g_pGamePersistent->Environment().wetness_factor)) // portal-mod E2
     {
         PIX_EVENT(PHASE_SSR_BLUR);
 
@@ -136,6 +140,13 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
         cmd_list.set_ColorWriteEnable();
 
         RImplementation.render_forward();
+    }
+
+    // portal-mod E2: the view through a portal ends here, HDR, before bloom/tonemap/AA: the portal shader samples it
+    if (portal_mod_pass)
+    {
+        HW.get_context(cmd_list.context_id)->CopyResource(rt_portal0->pSurface, rt_Generic_0->pSurface);
+        return;
     }
 
     auto& dsgraph = RImplementation.get_imm_context();

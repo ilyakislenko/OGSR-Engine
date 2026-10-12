@@ -253,6 +253,7 @@ CRenderTarget::CRenderTarget()
 
         rt_dof.create(r2_RT_dof, w, h, DXGI_FORMAT_R8G8B8A8_UNORM);
 
+        rt_portal0.create(r2_RT_portal0, w, h, DXGI_FORMAT_R16G16B16A16_FLOAT); // portal-mod E2
         rt_second_vp.create(r2_RT_secondVP, w, h, DXGI_FORMAT_R8G8B8A8_UNORM); //--#SM+#-- +SecondVP+
 
         rt_fakescope.create(r2_RT_scopert, w, h, DXGI_FORMAT_R8G8B8A8_UNORM); // crookr fakescope

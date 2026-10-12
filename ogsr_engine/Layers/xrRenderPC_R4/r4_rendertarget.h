@@ -50,6 +50,7 @@ public:
     ref_rt rt_Generic_combine_scope;
 
     //  Second viewport
+    ref_rt rt_portal0; // portal-mod E2: HDR view through a portal
     ref_rt rt_second_vp; // 32bit		(r,g,b,a) 
 
     ref_rt rt_dof;
@@ -102,6 +103,7 @@ public:
 
     ref_shader s_puddles;
     ref_shader s_portal_gun; // portal-mod
+    void portal_mod_reset_marks() { dwAccumulatorClearMark = 0; dwFlareClearMark = 0; } // portal-mod E2
 
 private:
     // OCCq

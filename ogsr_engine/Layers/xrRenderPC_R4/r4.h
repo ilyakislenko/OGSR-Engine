@@ -317,6 +317,9 @@ public:
 
     virtual void OnFrame();
 
+    void RenderPortalView(const Fvector& pos, const Fvector& dir, const Fvector& top, const Fplane& clip) override; // portal-mod E2
+    void portal_mod_projection(bool standard);
+    Fmatrix portal_mod_P_std{}, portal_mod_P_obl{};
     void AfterWorldRender() override; //Вызывается после рендера мира и перед UI ПДА
     void AfterUIRender() override; //После рендеринга UI. Вызывать только если нам нужно отрендерить кадр для пда.
 
