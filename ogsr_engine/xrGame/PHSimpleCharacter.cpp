@@ -1402,7 +1402,7 @@ void CPHSimpleCharacter::InitContact(dContact* c, bool& do_collide, u16 material
         GetPosition(feet);
         Fvector cp; // portal-mod E13: the real contact point
         portal_mod::contact_point(c->geom.pos, c->geom.normal, dBodyGetPosition(m_body), &cp.x);
-        if (portal_mod::hole(&cp.x, c->geom.normal, feet.y, c->geom.depth))
+        if (portal_mod::hole(&cp.x, c->geom.normal, feet.y, c->geom.depth, dBodyGetPosition(m_body))) // portal-mod E14
         {
             do_collide = false;
             return;

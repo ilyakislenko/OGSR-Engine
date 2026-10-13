@@ -145,6 +145,10 @@ CLevel::~CLevel()
     xr_delete(g_player_hud);
     //	g_pGameLevel		= NULL;
     Msg("- Destroying level");
+    // portal-mod E14: the portals go with the level (Lua starts with none after a load or a level change)
+    portal_mod_draw[0].on = false;
+    portal_mod_draw[1].on = false;
+    portal_mod::view_roll = 0.f;
 
     Engine.Event.Handler_Detach(eEntitySpawn, this);
 

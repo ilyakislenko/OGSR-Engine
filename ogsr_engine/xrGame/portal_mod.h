@@ -81,7 +81,7 @@ inline bool crosses(const Frame& A, const Fvector& p0, const Fvector& dir, float
 // Such contacts are dropped, so the portal is a hole you can walk into (and fall into, on a floor); a floor in front
 // of a wall portal still holds you up. depth: the contact's penetration. feet_y (a character's feet): only what is right under them (12 cm) counts as ground,
 // not the top or underside of a fence rail or a sill at shin, knee or chest height.
-inline bool hole(const float* p, const float* nrm, float feet_y = FLT_MAX, float depth = 0.f)
+inline bool hole(const float* p, const float* nrm, float feet_y = FLT_MAX, float depth = 0.f, const float* body = nullptr)
 {
     if (!linked())
         return false;
@@ -90,6 +90,14 @@ inline bool hole(const float* p, const float* nrm, float feet_y = FLT_MAX, float
         Frame A;
         if (!get_frame(i, A))
             continue;
+        if (body) // portal-mod E14: only for a body in front of the opening (or in it), not one passing near the portal
+        {
+            Fvector b;
+            b.set(body[0] - A.c.x, body[1] - A.c.y, body[2] - A.c.z);
+            const float hb = b.dotproduct(A.n), xb = b.dotproduct(A.r), yb = b.dotproduct(A.u);
+            if (hb > 1.2f || hb < -2.f || _abs(xb) > A.hw + 0.3f || yb > A.hh + 0.3f || yb < -A.hh - 0.5f)
+                continue;
+        }
         Fvector q;
         q.set(p[0] - A.c.x, p[1] - A.c.y, p[2] - A.c.z);
         const float h = q.dotproduct(A.n); // the surface is at -0.012 (the drawn quad floats 1.2 cm in front)
@@ -106,7 +114,8 @@ inline bool hole(const float* p, const float* nrm, float feet_y = FLT_MAX, float
             if (nu > 0.7f && p[1] < feet_y + 0.12f)
                 continue; // the ground in front holds you up (floor/ceiling portals: whatever stands along them)
         }
-        else if (_abs(A.n.y) < 0.7f && h > -0.6f && nu > 0.993f && p[1] < feet_y + 0.05f)
+        else if (_abs(A.n.y) < 0.7f && h > -0.6f && nu > 0.7f && _abs(nrm[0] * A.n.x + nrm[1] * A.n.y + nrm[2] * A.n.z) < 0.15f &&
+                 p[1] < feet_y + 0.05f) // portal-mod E14: slopes are ground too, a board's edge leaning out of the wall is not
             continue; // flat ground level with the feet at and just behind a wall portal: you walk in on it (with nothing
                       // under the leading foot the character controller backs off as from a ledge). Not a fence's bottom
                       // rail or the boards' lower edge: their contacts are higher or slanted (a board's edge leans

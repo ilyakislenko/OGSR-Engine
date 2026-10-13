@@ -29,7 +29,7 @@ static bool portal_mod_hole_contact(const dContact& c)
         portal_mod::contact_point(c.geom.pos, c.geom.normal, dBodyGetPosition(b), &cp.x);
     else
         cp.set(c.geom.pos[0], c.geom.pos[1], c.geom.pos[2]);
-    return portal_mod::hole(&cp.x, c.geom.normal);
+    return b && portal_mod::hole(&cp.x, c.geom.normal, FLT_MAX, 0.f, dBodyGetPosition(b)); // portal-mod E14
 }
 static float max_depth = 0.f;
 static float friction_factor = 0.f;

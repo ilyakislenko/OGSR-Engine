@@ -52,7 +52,8 @@ static void cammera_shell_collide_callback_common(bool& do_collide, bool bo1, dC
             portal_mod::contact_point(c.geom.pos, c.geom.normal, dBodyGetPosition(cam_body), &cp.x);
         else
             cp.set(c.geom.pos[0], c.geom.pos[1], c.geom.pos[2]);
-        if (portal_mod::hole(&cp.x, c.geom.normal) || (cam_body && portal_mod::in_hole(dBodyGetPosition(cam_body))))
+        if (cam_body && (portal_mod::hole(&cp.x, c.geom.normal, FLT_MAX, 0.f, dBodyGetPosition(cam_body)) ||
+                         portal_mod::in_hole(dBodyGetPosition(cam_body)))) // portal-mod E14
             return;
     }
     const SGameMtl* oposite_matrial = bo1 ? material_1 : material_2;
