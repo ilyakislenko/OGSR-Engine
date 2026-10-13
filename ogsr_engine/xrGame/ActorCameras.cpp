@@ -21,6 +21,7 @@
 #include "CharacterPhysicsSupport.h"
 #include "EffectorShot.h"
 #include "phcollidevalidator.h"
+#include "portal_mod.h" // portal-mod E10
 #include "PHShell.h"
 
 ENGINE_API extern float psHUD_FOV; //--#SM+#--
@@ -427,6 +428,8 @@ void CActor::cam_Update(float dt, float fFOV)
 
     // calc point
     xform.transform_tiny(point);
+
+    dangle.z += portal_mod::view_roll; // portal-mod E10: the view's roll after a portal, Lua brings it back to 0
 
     CCameraBase* C = cam_Active();
     C->Update(point, dangle);

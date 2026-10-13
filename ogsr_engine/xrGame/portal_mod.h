@@ -73,4 +73,95 @@ inline bool crosses(const Frame& A, const Fvector& p0, const Fvector& dir, float
     const float x = hit.dotproduct(A.r) / (A.hw + grow), y = hit.dotproduct(A.u) / (A.hh + grow);
     return x * x + y * y <= 1.f;
 }
+
+// portal-mod E10: a character's contact with static geometry at p (contact normal nrm) inside a linked portal:
+// anything at or behind the portal's surface (up to 2.5 m: the wall, frames and bumps in it, whatever is behind it)
+// but the ground at its foot, or, in front of it, the surface itself (a sphere's contact point can sit up to its
+// radius out, facing along the portal's normal).
+// Such contacts are dropped, so the portal is a hole you can walk into (and fall into, on a floor); a floor in front
+// of a wall portal still holds you up. depth: the contact's penetration. feet_y (a character's feet): only what is right under them (12 cm) counts as ground,
+// not the top or underside of a fence rail or a sill at shin, knee or chest height.
+inline bool hole(const float* p, const float* nrm, float feet_y = FLT_MAX, float depth = 0.f)
+{
+    if (!linked())
+        return false;
+    for (int i = 0; i < 2; ++i)
+    {
+        Frame A;
+        if (!get_frame(i, A))
+            continue;
+        Fvector q;
+        q.set(p[0] - A.c.x, p[1] - A.c.y, p[2] - A.c.z);
+        const float h = q.dotproduct(A.n); // the surface is at -0.012 (the drawn quad floats 1.2 cm in front)
+        if (h > 0.6f || h < -2.5f)
+            continue;
+        const float nu = _abs(nrm[0] * A.u.x + nrm[1] * A.u.y + nrm[2] * A.u.z);
+        if (h > 0.3f)
+        {
+            if (_abs(nrm[0] * A.n.x + nrm[1] * A.n.y + nrm[2] * A.n.z) < 0.5f)
+                continue; // further out only the surface itself (a sphere's contact point sits at its centre)
+        }
+        else if (h > 0.05f)
+        {
+            if (nu > 0.7f && p[1] < feet_y + 0.12f)
+                continue; // the ground in front holds you up (floor/ceiling portals: whatever stands along them)
+        }
+        else if (_abs(A.n.y) < 0.7f && h > -0.6f && nu > 0.993f && p[1] < feet_y + 0.05f)
+            continue; // flat ground level with the feet at and just behind a wall portal: you walk in on it (with nothing
+                      // under the leading foot the character controller backs off as from a ledge). Not a fence's bottom
+                      // rail or the boards' lower edge: their contacts are higher or slanted (a board's edge leans
+                      // 10-12 degrees, the ground under the feet hardly at all). No depth test: a foot that sank a
+                      // little would lose the ground behind the plane and sink further.
+        // at or behind the surface anything goes: the wall, frames and bumps in it, steps and floors behind it
+        // the hole is the portal's rectangle, as in Portal 2 (the oval is only drawn): an oval's narrow bottom would
+        // catch the feet of someone walking into a portal that stands on the floor. A wall portal's hole reaches 0.2 m
+        // below it, so a portal a few centimetres above the floor can be walked into like a low step.
+        const float y = q.dotproduct(A.u);
+        if (_abs(q.dotproduct(A.r)) < A.hw && y < A.hh && y > -A.hh - (_abs(A.n.y) < 0.7f ? 0.2f : 0.f))
+            return true;
+    }
+    return false;
+}
+
+
+// portal-mod E11: is a point (a body's centre) in a linked portal's hole zone: over its rectangle (0.2 m more at the
+// bottom of a wall portal), from 1 m in front of it to 2 m behind it?
+inline bool in_hole(const float* p)
+{
+    if (!linked())
+        return false;
+    for (int i = 0; i < 2; ++i)
+    {
+        Frame A;
+        if (!get_frame(i, A))
+            continue;
+        Fvector q;
+        q.set(p[0] - A.c.x, p[1] - A.c.y, p[2] - A.c.z);
+        const float h = q.dotproduct(A.n), y = q.dotproduct(A.u);
+        if (h < 1.f && h > -2.f && _abs(q.dotproduct(A.r)) < A.hw && y < A.hh && y > -A.hh - (_abs(A.n.y) < 0.7f ? 0.2f : 0.f))
+            return true;
+    }
+    return false;
+}
+
+// portal-mod E13: where a contact really is. The tri-list collider reports a long triangle's far vertex as the contact
+// point (a 20 m fence board: 20 m away); then the body's centre projected onto the contact plane is used instead.
+inline void contact_point(const float* pos, const float* nrm, const float* body, float* out)
+{
+    const float dx = pos[0] - body[0], dy = pos[1] - body[1], dz = pos[2] - body[2];
+    if (dx * dx + dy * dy + dz * dz <= 1.5f * 1.5f)
+    {
+        out[0] = pos[0];
+        out[1] = pos[1];
+        out[2] = pos[2];
+        return;
+    }
+    const float d = dx * nrm[0] + dy * nrm[1] + dz * nrm[2];
+    out[0] = body[0] + nrm[0] * d;
+    out[1] = body[1] + nrm[1] * d;
+    out[2] = body[2] + nrm[2] * d;
+}
+
+// portal-mod E10: roll added to the first-person camera (radians), set from Lua (level.portal_view_roll)
+inline float view_roll = 0.f;
 } // namespace portal_mod

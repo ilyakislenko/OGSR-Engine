@@ -28,6 +28,7 @@
 #include "alife_time_manager.h"
 #include "map_manager.h"
 #include "map_location.h"
+#include "portal_mod.h" // portal-mod E10
 #include "phworld.h"
 #include "../xrcdb/xr_collide_defs.h"
 #include "script_rq_result.h"
@@ -56,6 +57,8 @@ static void portal_set(int idx, Fvector pos, Fvector normal, Fvector up, float w
     p.params.set(color, linked ? 1.f : 0.f, open, 0.f);
     p.on = true;
 }
+
+static void portal_view_roll(float roll) { portal_mod::view_roll = roll; } // portal-mod E10
 
 static void portal_clear(int idx)
 {
@@ -89,6 +92,12 @@ static Fvector actor_velocity()
     if (CActor* a = Actor())
         v.set(a->character_physics_support()->movement()->GetVelocity());
     return v;
+}
+
+static void portal_set_actor_position(Fvector p) // portal-mod E12
+{
+    if (CActor* a = Actor())
+        a->portal_mod_place(p);
 }
 
 static void set_actor_velocity(Fvector v)
@@ -1185,8 +1194,8 @@ void CLevel::script_register(lua_State* L)
 
             def("advance_game_time", &AdvanceGameTime),
 
-            def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("ray_query_normal", &ray_query_normal), // portal-mod
-            def("actor_velocity", &actor_velocity), def("set_actor_velocity", &set_actor_velocity),
+            def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("portal_view_roll", &portal_view_roll), def("ray_query_normal", &ray_query_normal), // portal-mod
+            def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position), def("set_actor_velocity", &set_actor_velocity),
 
             def("get_target_dist", &GetTargetDist), def("get_target_obj", &GetTargetObj), def("get_current_ray_query", &GetCurrentRayQuery),
             //

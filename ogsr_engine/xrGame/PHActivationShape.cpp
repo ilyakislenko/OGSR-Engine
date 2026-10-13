@@ -19,6 +19,18 @@
 #include "PHDynamicData.h"
 #include "PHSynchronize.h"
 #include "phnetstate.h"
+#include "portal_mod.h" // portal-mod E10
+// portal-mod E13: hole() at the real contact point (the moving body's centre projected when the reported one is far)
+static bool portal_mod_hole_contact(const dContact& c)
+{
+    const dBodyID b = dGeomGetBody(c.geom.g1) ? dGeomGetBody(c.geom.g1) : dGeomGetBody(c.geom.g2);
+    Fvector cp;
+    if (b)
+        portal_mod::contact_point(c.geom.pos, c.geom.normal, dBodyGetPosition(b), &cp.x);
+    else
+        cp.set(c.geom.pos[0], c.geom.pos[1], c.geom.pos[2]);
+    return portal_mod::hole(&cp.x, c.geom.normal);
+}
 static float max_depth = 0.f;
 static float friction_factor = 0.f;
 static float cfm = 1.e-10f;
@@ -37,6 +49,11 @@ static float erp = 1.f;
 #endif
 void ActivateTestDepthCallback(bool& do_colide, bool bo1, dContact& c, SGameMtl* material_1, SGameMtl* material_2)
 {
+    if (do_colide && !(dGeomGetBody(c.geom.g1) && dGeomGetBody(c.geom.g2)) && portal_mod_hole_contact(c))
+    {
+        do_colide = false; // portal-mod E10: a teleport into a portal's hole is not pushed back out of the wall
+        return;
+    }
     if (do_colide && !material_1->Flags.test(SGameMtl::flPassable) && !material_2->Flags.test(SGameMtl::flPassable))
     {
         float& depth = c.geom.depth;
@@ -50,6 +67,11 @@ void ActivateTestDepthCallback(bool& do_colide, bool bo1, dContact& c, SGameMtl*
 }
 void StaticEnvironment(bool& do_colide, bool bo1, dContact& c, SGameMtl* material_1, SGameMtl* material_2)
 {
+    if (!(dGeomGetBody(c.geom.g1) && dGeomGetBody(c.geom.g2)) && portal_mod_hole_contact(c))
+    {
+        do_colide = false; // portal-mod E10: a teleport into a portal's hole is not pushed back out of the wall
+        return;
+    }
     dJointID contact_joint = dJointCreateContact(0, ContactGroup, &c);
 
     if (bo1)
@@ -66,6 +88,11 @@ void StaticEnvironment(bool& do_colide, bool bo1, dContact& c, SGameMtl* materia
 }
 void GetMaxDepthCallback(bool& do_colide, bool bo1, dContact& c, SGameMtl* material_1, SGameMtl* material_2)
 {
+    if (do_colide && !(dGeomGetBody(c.geom.g1) && dGeomGetBody(c.geom.g2)) && portal_mod_hole_contact(c))
+    {
+        do_colide = false; // portal-mod E10: a teleport into a portal's hole is not pushed back out of the wall
+        return;
+    }
     if (do_colide && !material_1->Flags.test(SGameMtl::flPassable) && !material_2->Flags.test(SGameMtl::flPassable))
     {
         float& depth = c.geom.depth;

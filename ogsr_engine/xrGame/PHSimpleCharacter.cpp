@@ -19,6 +19,7 @@
 #include "PHCollideValidator.h"
 #include "CalculateTriangle.h"
 #include "game_base_space.h"
+#include "portal_mod.h" // portal-mod E10
 //#include "phvalide.h"
 
 IC bool PhOutOfBoundaries(const Fvector& v) { return v.y < phBoundaries.y1; }
@@ -813,6 +814,10 @@ bool CPHSimpleCharacter::ValidateWalkOnMesh()
     center_forbid.set(center);
     center_forbid.y += CHWON_CALL_FB_HIGHT;
     center.y += m_radius + CHWON_CALL_UP_SHIFT;
+    // portal-mod E11: a portal's hole ahead is an opening, not a wall to stop at or a step to climb (the climb force
+    // follows the last wall contact's normal and shoved the body sideways along the portal's wall)
+    if (portal_mod::in_hole(&center.x) || portal_mod::in_hole(&center_forbid.x))
+        return false;
 
     // perform single query / two usages
     Fbox query, tmp;
@@ -1390,6 +1395,19 @@ u16 CPHSimpleCharacter::RetriveContactBone()
 /////////////////////////////////////////////////////////////////
 void CPHSimpleCharacter::InitContact(dContact* c, bool& do_collide, u16 material_idx_1, u16 material_idx_2)
 {
+    // portal-mod E10: the surface inside a linked portal is a hole (static geometry only)
+    if (do_collide && !(dGeomGetBody(c->geom.g1) && dGeomGetBody(c->geom.g2)))
+    {
+        Fvector feet;
+        GetPosition(feet);
+        Fvector cp; // portal-mod E13: the real contact point
+        portal_mod::contact_point(c->geom.pos, c->geom.normal, dBodyGetPosition(m_body), &cp.x);
+        if (portal_mod::hole(&cp.x, c->geom.normal, feet.y, c->geom.depth))
+        {
+            do_collide = false;
+            return;
+        }
+    }
     const dReal* normal = c->geom.normal;
     const dReal* pos = c->geom.pos;
     const dGeomID g1 = c->geom.g1;

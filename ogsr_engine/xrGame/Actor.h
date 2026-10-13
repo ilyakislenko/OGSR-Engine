@@ -592,6 +592,7 @@ public:
     void SetPhPosition(const Fmatrix& pos);
 
     void ForceTransform(const Fmatrix& m) override;
+    void portal_mod_place(const Fvector& p); // portal-mod E12: teleport with no collision correction
     void ForceTransformAndDirection(const Fmatrix& m) override;
 
     //	virtual void			UpdatePosStack	( u32 Time0, u32 Time1 );

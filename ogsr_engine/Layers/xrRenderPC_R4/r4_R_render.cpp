@@ -601,7 +601,14 @@ void CRender::render_forward()
             cmd_list.set_xform_world(portal.xform);
             cmd_list.set_c("portal_params", portal.params.x, portal.params.y, portal.params.z, portal.params.w);
 
-            cmd_list.Render(6);
+            // portal-mod E10: the second quad behind the surface only when the camera is right at the portal (closer than
+            // the near plane can show it); otherwise it would peek over a fence or through the gaps between its boards
+            const float hw = portal.xform.i.magnitude(), hh = portal.xform.j.magnitude();
+            Fvector rel;
+            rel.sub(Device.vCameraPosition, portal.xform.c);
+            const bool close = -to_portal.dotproduct(portal.xform.k) < 0.6f && _abs(rel.dotproduct(portal.xform.i)) / hw < hw + 0.4f &&
+                _abs(rel.dotproduct(portal.xform.j)) / hh < hh + 0.4f;
+            cmd_list.Render(close ? 12 : 6);
         }
 
         dsgraph.r_dsgraph_render_graph(1); // normal level, secondary priority

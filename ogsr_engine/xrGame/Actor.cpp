@@ -1302,6 +1302,21 @@ void CActor::ForceTransform(const Fmatrix& m)
 
     character_physics_support()->set_movement_position(m.c);
     character_physics_support()->movement()->SetVelocity(0, 0, 0);
+    fPrevCamPos = m.c.y; // portal-mod E10: no stair-step camera smoothing after a teleport (it dipped the view)
+}
+
+// portal-mod E12: out of a portal the body is half inside the exit wall (a hole for it); the activation box of
+// set_movement_position would shove it out. The character's own contacts settle the feet on the ground.
+void CActor::portal_mod_place(const Fvector& p)
+{
+    if (!g_Alive())
+        return;
+    XFORM().c.set(p);
+    CPHMovementControl* mc = character_physics_support()->movement();
+    if (mc->CharacterExist())
+        mc->EnableCharacter();
+    mc->SetPosition(p);
+    fPrevCamPos = p.y;
 }
 
 void CActor::ForceTransformAndDirection(const Fmatrix& m)

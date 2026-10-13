@@ -10,6 +10,7 @@
 #include "phcollidevalidator.h"
 #include "PHShell.h"
 #include "matrix_utils.h"
+#include "portal_mod.h" // portal-mod E10
 #include "PhysicsShellHolder.h"
 
 #include "GeometryBits.h"
@@ -40,6 +41,20 @@ static void cammera_shell_collide_callback_common(bool& do_collide, bool bo1, dC
     if (!do_collide)
         return;
     do_collide = false;
+    // portal-mod E10: the camera box goes into a portal's hole with the body (else the eye stops short of the plane)
+    if (!(dGeomGetBody(c.geom.g1) && dGeomGetBody(c.geom.g2)))
+    {
+        // portal-mod E11: while the camera is in a portal's hole zone it does not collide with static geometry at all,
+        // so walking in near the portal's edge the eye still goes in with the body
+        const dBodyID cam_body = dGeomGetBody(bo1 ? c.geom.g1 : c.geom.g2);
+        Fvector cp; // portal-mod E13: the real contact point
+        if (cam_body)
+            portal_mod::contact_point(c.geom.pos, c.geom.normal, dBodyGetPosition(cam_body), &cp.x);
+        else
+            cp.set(c.geom.pos[0], c.geom.pos[1], c.geom.pos[2]);
+        if (portal_mod::hole(&cp.x, c.geom.normal) || (cam_body && portal_mod::in_hole(dBodyGetPosition(cam_body))))
+            return;
+    }
     const SGameMtl* oposite_matrial = bo1 ? material_1 : material_2;
     if (oposite_matrial->Flags.test(SGameMtl::flPassable))
         return;

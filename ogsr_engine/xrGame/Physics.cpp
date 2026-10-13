@@ -21,6 +21,7 @@ extern CPHWorld* ph_world;
 ///////////////////////////////////////////////////////////////////
 
 #include "ExtendedGeom.h"
+#include "portal_mod.h" // portal-mod E11
 // union dInfBytes dInfinityValue = {{0,0,0x80,0x7f}};
 PhysicsStepTimeCallback* physics_step_time_callback = 0;
 
@@ -236,6 +237,8 @@ IC static int CollideIntoGroup(dGeomID o1, dGeomID o2, dJointGroupID jointGroup,
             usr_data_2->pushing_neg = usr_data_2->pushing_neg && !GMLib.GetMaterialByIdx(usr_data_2->neg_tri->material)->Flags.test(SGameMtl::flPassable);
 
             pushing_neg = usr_data_2->pushing_b_neg || usr_data_2->pushing_neg;
+            if (pushing_neg && dGeomGetBody(g2) && portal_mod::in_hole(dBodyGetPosition(dGeomGetBody(g2))))
+                pushing_neg = false; // portal-mod E11: behind the wall inside a portal's hole on purpose
 
             if (usr_data_2->ph_object)
             {
@@ -250,6 +253,8 @@ IC static int CollideIntoGroup(dGeomID o1, dGeomID o2, dJointGroupID jointGroup,
             usr_data_1->pushing_neg = usr_data_1->pushing_neg && !GMLib.GetMaterialByIdx(usr_data_1->neg_tri->material)->Flags.test(SGameMtl::flPassable);
 
             pushing_neg = usr_data_1->pushing_b_neg || usr_data_1->pushing_neg;
+            if (pushing_neg && dGeomGetBody(g1) && portal_mod::in_hole(dBodyGetPosition(dGeomGetBody(g1))))
+                pushing_neg = false; // portal-mod E11: behind the wall inside a portal's hole on purpose
 
             if (usr_data_1->ph_object)
                 usr_data_1->ph_object->InitContact(&c, do_collide, material_idx_1, material_idx_2);
