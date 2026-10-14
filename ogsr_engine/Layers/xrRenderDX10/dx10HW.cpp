@@ -459,7 +459,8 @@ void CHW::UpdateWindowProps(HWND m_hWnd) const
         , (m_rcWindowBounds.right - m_rcWindowBounds.left)
         , (m_rcWindowBounds.bottom - m_rcWindowBounds.top)
         
-        , /*SWP_SHOWWINDOW | */SWP_NOCOPYBITS | SWP_DRAWFRAME);
+        , /*SWP_SHOWWINDOW | */SWP_NOCOPYBITS | SWP_DRAWFRAME
+            | (strstr(Core.Params, "-noactivate") ? SWP_NOACTIVATE : 0)); // stalker-bot B10
 }
 
 struct _uniq_mode
