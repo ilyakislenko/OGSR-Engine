@@ -1057,6 +1057,382 @@ static void shader_get_custom_param(const char* key, float& x, float& y, float& 
 }
 
 
+// stalker-bot B1 ---------------------------------------------------------------------------------------------
+#include "level_changer.h"
+#include "location_manager.h"
+#include "ai_object_location.h"
+#include "game_graph.h"
+#include <queue>
+
+u32 g_bot_move_flags = 0;
+u32 g_bot_move_until = 0;
+extern xr_vector<CLevelChanger*> g_lchangers;
+
+struct BotAvoid
+{
+    float x, z, r2;
+};
+
+static bool bot_in_avoid(const xr_vector<BotAvoid>& av, float x, float z)
+{
+    for (const auto& a : av)
+        if (_sqr(x - a.x) + _sqr(z - a.z) < a.r2)
+            return true;
+    return false;
+}
+
+static bool bot_segment_clear(const xr_vector<BotAvoid>& av, const Fvector& a, const Fvector& b)
+{
+    const float dx = b.x - a.x, dz = b.z - a.z, len2 = dx * dx + dz * dz;
+    for (const auto& c : av)
+    {
+        float t = len2 > EPS_L ? ((c.x - a.x) * dx + (c.z - a.z) * dz) / len2 : 0.f;
+        clamp(t, 0.f, 1.f);
+        if (_sqr(a.x + dx * t - c.x) + _sqr(a.z + dz * t - c.z) < c.r2)
+            return false;
+    }
+    return true;
+}
+
+// A* over the level graph (the graph NPCs walk on) that keeps out of the avoid circles (anomalies).
+static bool bot_astar(const CLevelGraph& lg, u32 from, u32 to, const xr_vector<BotAvoid>& av, xr_vector<u32>& path)
+{
+    const u32 n = lg.header().vertex_count();
+    static xr_vector<float> g;
+    static xr_vector<u32> parent, seen, closed;
+    static u32 stamp = 0;
+    if (g.size() != n)
+    {
+        g.assign(n, 0.f);
+        parent.assign(n, u32(-1));
+        seen.assign(n, 0);
+        closed.assign(n, 0);
+        stamp = 0;
+    }
+    if (++stamp == 0)
+    {
+        std::fill(seen.begin(), seen.end(), 0);
+        std::fill(closed.begin(), closed.end(), 0);
+        stamp = 1;
+    }
+    const Fvector goal = lg.vertex_position(to);
+    using Node = std::pair<float, u32>;
+    std::priority_queue<Node, xr_vector<Node>, std::greater<Node>> open;
+    seen[from] = stamp;
+    g[from] = 0.f;
+    parent[from] = u32(-1);
+    open.push({lg.vertex_position(from).distance_to(goal), from});
+    while (!open.empty())
+    {
+        const u32 v = open.top().second;
+        open.pop();
+        if (closed[v] == stamp)
+            continue;
+        closed[v] = stamp;
+        if (v == to)
+        {
+            for (u32 x = to; x != u32(-1); x = parent[x])
+                path.push_back(x);
+            std::reverse(path.begin(), path.end());
+            return true;
+        }
+        const Fvector pv = lg.vertex_position(v);
+        CLevelGraph::const_iterator i, e;
+        lg.begin(v, i, e);
+        for (; i != e; ++i)
+        {
+            const u32 w = lg.value(v, i);
+            if (!lg.valid_vertex_id(w) || closed[w] == stamp)
+                continue;
+            const Fvector pw = lg.vertex_position(w);
+            // stalker-bot B3: inside an avoid circle a step costs 40 times its length (around if possible, out by
+            // the shortest way, in only for a goal inside)
+            const float ng = g[v] + pv.distance_to(pw) * (bot_in_avoid(av, pw.x, pw.z) ? 40.f : 1.f);
+            if (seen[w] != stamp || ng < g[w])
+            {
+                seen[w] = stamp;
+                g[w] = ng;
+                parent[w] = v;
+                open.push({ng + pw.distance_to(goal), w});
+            }
+        }
+    }
+    return false;
+}
+
+// The route, string-pulled: from each corner the farthest vertex of the path reachable in a straight line on the
+// graph that misses the avoid circles (at most 60 vertices, ~40 m, so the walker re-aims now and then).
+// avoid: {x1, z1, r1, x2, z2, r2, ...}; a circle around the start or the goal is ignored (it must stay reachable).
+static luabind::object bot_path(u32 from, u32 to, luabind::object const& avoid)
+{
+    auto t = luabind::newtable(ai().script_engine().lua());
+    const CLevelGraph& lg = ai().level_graph();
+    if (!lg.valid_vertex_id(from) || !lg.valid_vertex_id(to))
+        return t;
+    const Fvector ps = lg.vertex_position(from), pg = lg.vertex_position(to);
+    xr_vector<float> flat;
+    if (avoid.type() == LUA_TTABLE)
+        for (auto it = avoid.begin(); it != avoid.end(); ++it)
+            flat.push_back(luabind::object_cast<float>(*it));
+    xr_vector<BotAvoid> av;
+    for (u32 k = 0; k + 2 < flat.size(); k += 3)
+    {
+        av.push_back(BotAvoid{flat[k], flat[k + 1], _sqr(flat[k + 2])}); // stalker-bot B3: no circle dropped
+    }
+    xr_vector<u32> path;
+    if (!bot_astar(lg, from, to, av, path) || path.empty())
+        return t;
+    int k = 1;
+    t[k++] = path[0];
+    u32 i = 0;
+    while (i + 1 < path.size())
+    {
+        u32 j = i + 1;
+        while (j + 1 < path.size() && j - i < 60 && lg.check_vertex_in_direction(path[i], lg.vertex_position(path[i]), path[j + 1]) &&
+               bot_segment_clear(av, lg.vertex_position(path[i]), lg.vertex_position(path[j + 1])))
+            ++j;
+        t[k++] = path[j];
+        i = j;
+    }
+    return t;
+}
+
+// The level changer on the game-graph route to dest_gv, as map_location.cpp picks it for the PDA arrow.
+// stalker-bot B9: a dead man's known info portions to the actor, as the inventory window of his body passes them
+#include "alife_registry_wrappers.h"
+static void bot_take_body_info(u16 id)
+{
+    if (!Actor())
+        return;
+    CInfoPortionWrapper* reg = xr_new<CInfoPortionWrapper>();
+    reg->registry().init(id);
+    KNOWN_INFO_VECTOR& known = reg->registry().objects();
+    for (auto it = known.begin(); it != known.end(); ++it)
+    {
+        NET_Packet P;
+        CGameObject::u_EventGen(P, GE_INFO_TRANSFER, Actor()->ID());
+        P.w_u16(0);
+        P.w_stringZ((*it).info_id);
+        P.w_u8(1);
+        CGameObject::u_EventSend(P);
+    }
+    known.clear();
+    xr_delete(reg);
+}
+
+// stalker-bot B8: every level changer online on this level and the game vertex it leads to
+static luabind::object bot_exits()
+{
+    auto t = luabind::newtable(ai().script_engine().lua());
+    int k = 1;
+    for (CLevelChanger* lc : g_lchangers)
+    {
+        auto e = luabind::newtable(ai().script_engine().lua());
+        e["id"] = lc->ID();
+        e["dest_gv"] = u32(lc->bot_dest_gv());
+        t[k++] = e;
+    }
+    return t;
+}
+
+static luabind::object bot_exit_to(u32 dest_gv)
+{
+    auto t = luabind::newtable(ai().script_engine().lua());
+    CActor* a = Actor();
+    if (!a || !ai().get_game_graph() || dest_gv >= ai().game_graph().header().vertex_count())
+        return t;
+    xr_vector<u32> path;
+    GraphEngineSpace::CGameVertexParams params(a->locations().vertex_types(), flt_max);
+    if (!ai().graph_engine().search(ai().game_graph(), a->ai_location().game_vertex_id(), GameGraph::_GRAPH_ID(dest_gv), &path, params))
+        return t;
+    for (auto it = path.rbegin(); it != path.rend(); ++it)
+        for (CLevelChanger* lc : g_lchangers)
+            if (*it == lc->ai_location().game_vertex_id())
+            {
+                t["id"] = lc->ID();
+                t["dest_gv"] = u32(lc->bot_dest_gv());
+                return t;
+            }
+    return t;
+}
+
+// The bot heads for a level changer: for the next second walking into one changes the level without asking.
+u32 g_bot_lc_until = 0;
+static void bot_level_change_auto() { g_bot_lc_until = Device.dwTimeGlobal + 1000; }
+
+static luabind::object bot_talk()
+{
+    lua_State* L = ai().script_engine().lua();
+    auto t = luabind::newtable(L);
+    CUIGameSP* g = smart_cast<CUIGameSP*>(HUD().GetUI()->UIGame());
+    if (!g || !g->TalkMenu || !g->TalkMenu->IsShown())
+        return t;
+    CUITalkWnd* w = g->TalkMenu;
+    t["mode"] = w->BotTopicMode() ? "topic" : "phrase";
+    t["dialog"] = w->BotDialogId().c_str();
+    t["pending"] = w->BotPending();
+    auto opts = luabind::newtable(L);
+    int k = 1;
+    for (const auto& q : w->m_bot_questions)
+    {
+        auto o = luabind::newtable(L);
+        o["id"] = q.first.c_str();
+        o["text"] = q.second.c_str();
+        opts[k++] = o;
+    }
+    t["options"] = opts;
+    return t;
+}
+
+static bool bot_talk_select(LPCSTR id)
+{
+    CUIGameSP* g = smart_cast<CUIGameSP*>(HUD().GetUI()->UIGame());
+    if (!g || !g->TalkMenu || !g->TalkMenu->IsShown())
+        return false;
+    return g->TalkMenu->BotAsk(id);
+}
+
+static void bot_move(int fwd, int strafe, bool sprint, bool jump, bool crouch)
+{
+    u32 f = 0;
+    if (fwd > 0)
+        f |= mcFwd;
+    else if (fwd < 0)
+        f |= mcBack;
+    if (strafe > 0)
+        f |= mcRStrafe;
+    else if (strafe < 0)
+        f |= mcLStrafe;
+    if (sprint)
+        f |= mcSprint;
+    if (jump)
+        f |= mcJump;
+    if (crouch)
+        f |= mcCrouch;
+    g_bot_move_flags = f;
+    g_bot_move_until = Device.dwTimeGlobal + 300;
+}
+// stalker-bot B2: all the actor's tasks (scripts only see the active one)
+#include "GameTaskManager.h"
+#include "GameTask.h"
+static luabind::object bot_tasks()
+{
+    lua_State* L = ai().script_engine().lua();
+    auto t = luabind::newtable(L);
+    CActor* a = Actor();
+    if (!a)
+        return t;
+    int k = 1;
+    for (SGameTaskKey& key : a->GameTaskManager().GameTasks())
+    {
+        CGameTask* gt = key.game_task;
+        if (!gt || gt->m_Objectives.empty())
+            continue;
+        auto o = luabind::newtable(L);
+        o["id"] = gt->m_ID.c_str();
+        o["title"] = gt->m_Title.c_str();
+        o["prio"] = gt->m_priority;
+        o["state"] = int(gt->Objective(0).TaskState());
+        o["received"] = double(gt->m_ReceiveTime);
+        auto objs = luabind::newtable(L);
+        int j = 1;
+        for (u32 i = 1; i < gt->m_Objectives.size(); ++i)
+        {
+            SGameTaskObjective& ob = gt->m_Objectives[i];
+            auto x = luabind::newtable(L);
+            x["idx"] = i;
+            x["desc"] = ob.description.c_str();
+            x["state"] = int(ob.TaskState());
+            x["target"] = ob.object_id;
+            objs[j++] = x;
+        }
+        o["objectives"] = objs;
+        t[k++] = o;
+    }
+    return t;
+}
+
+// stalker-bot B4: trading inside an open talk, as the trade window does it
+#include "Inventory.h"
+#include "Trade.h"
+#include "trade_parameters.h"
+
+// the partner's side of the deal (its CTrade: its prices, its money), when we are talking to it
+static CTrade* bot_their_trade(u16 partner_id)
+{
+    CActor* a = Actor();
+    if (!a || !a->IsTalking() || !a->GetTrade() || !a->GetTrade()->GetPartner())
+        return nullptr;
+    CGameObject* p = smart_cast<CGameObject*>(a->GetTrade()->GetPartner());
+    if (!p || p->ID() != partner_id)
+        return nullptr;
+    return a->GetTrade()->GetPartnerTrade();
+}
+
+static PIItem bot_item(u16 id)
+{
+    CObject* o = Level().Objects.net_Find(id);
+    return o ? smart_cast<PIItem>(o) : nullptr;
+}
+
+static u32 bot_trade_price(u16 partner_id, u16 item_id, bool actor_buys)
+{
+    CTrade* t = bot_their_trade(partner_id);
+    PIItem it = bot_item(item_id);
+    if (!t || !it || it->m_flags.test(CInventoryItem::FIAlwaysUntradable) || !it->CanTrade())
+        return 0;
+    CInventoryOwner* trader = t->pThis.inv_owner;
+    CInventoryOwner* me = t->pPartner.inv_owner;
+    CGameObject* owner = smart_cast<CGameObject*>(actor_buys ? trader : me);
+    if (!owner || it->object().H_Parent() != owner)
+        return 0;
+    if (!actor_buys)
+    {
+        const shared_str& sect = it->object().cNameSect();
+        if (!trader->trade_parameters().enabled(CTradeParameters::action_buy(0), sect))
+            return 0;
+        if (it->GetCondition() < trader->trade_parameters().factors(CTradeParameters::action_buy(0), sect).min_condition())
+            return 0;
+        if (trader->inventory().CalcTotalWeight() + it->Weight() > trader->inventory().GetMaxWeight())
+            return 0;
+    }
+    return t->GetItemPrice(it, !actor_buys); // the trader's side: it buys what we sell
+}
+
+static bool bot_trade(u16 partner_id, u16 item_id, bool actor_buys)
+{
+    CTrade* t = bot_their_trade(partner_id);
+    PIItem it = bot_item(item_id);
+    const u32 price = bot_trade_price(partner_id, item_id, actor_buys);
+    if (!t || !it || price == 0)
+        return false;
+    CInventoryOwner* trader = t->pThis.inv_owner;
+    CInventoryOwner* me = t->pPartner.inv_owner;
+    if (actor_buys ? me->get_money() < price : (!trader->InfinitiveMoney() && trader->get_money() < price))
+        return false;
+    t->OnPerformTrade(actor_buys ? price : 0, actor_buys ? 0 : price);
+    t->TransferItem(it, !actor_buys);
+    return true;
+}
+
+// stalker-bot B5: a stash, emptied the way its window does it
+void move_item(u16 from_id, u16 to_id, u16 what_id); // ui/UICarBodyWnd.cpp
+static bool bot_take_from_box(u16 box_id, u16 item_id)
+{
+    CActor* a = Actor();
+    CObject* bo = Level().Objects.net_Find(box_id);
+    CObject* io = Level().Objects.net_Find(item_id);
+    if (!a || !bo || !io || io->H_Parent() != bo)
+        return false;
+    IInventoryBox* box = smart_cast<IInventoryBox*>(bo);
+    if (!box || !box->IsOpened() || a->Position().distance_to(bo->Position()) > 3.f)
+        return false;
+    move_item(box_id, a->ID(), item_id);
+    return true;
+}
+
+// stalker-bot B1 end --------------------------------------------------------------------------------------------
+
 void CLevel::script_register(lua_State* L)
 {
     module(L)[class_<CEnvDescriptor>("CEnvDescriptor")
@@ -1195,7 +1571,12 @@ void CLevel::script_register(lua_State* L)
             def("advance_game_time", &AdvanceGameTime),
 
             def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("portal_view_roll", &portal_view_roll), def("ray_query_normal", &ray_query_normal), // portal-mod
-            def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position), def("set_actor_velocity", &set_actor_velocity),
+            def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position),
+            def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
+            def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_tasks", &bot_tasks), // stalker-bot B2
+            def("bot_trade_price", &bot_trade_price), def("bot_trade", &bot_trade), // stalker-bot B4
+            def("bot_take_from_box", &bot_take_from_box), // stalker-bot B5
+            def("set_actor_velocity", &set_actor_velocity),
 
             def("get_target_dist", &GetTargetDist), def("get_target_obj", &GetTargetObj), def("get_current_ray_query", &GetCurrentRayQuery),
             //
