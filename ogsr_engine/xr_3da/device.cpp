@@ -413,6 +413,7 @@ void CRenderDevice::ShowMainWindow() const
     if (strstr(Core.Params, "-noactivate")) // stalker-bot B10: the user's own window keeps the focus and the mouse
     {
         ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+        const_cast<CRenderDevice*>(this)->OnWM_Activate(MAKEWPARAM(WA_INACTIVE, 0), 0); // stalker-bot B10c
         return;
     }
     ShowWindow(m_hWnd, SW_SHOWNORMAL);
