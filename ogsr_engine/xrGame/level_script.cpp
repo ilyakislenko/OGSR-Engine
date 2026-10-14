@@ -1200,6 +1200,16 @@ static luabind::object bot_path(u32 from, u32 to, luabind::object const& avoid)
 // The level changer on the game-graph route to dest_gv, as map_location.cpp picks it for the PDA arrow.
 // stalker-bot B9: a dead man's known info portions to the actor, as the inventory window of his body passes them
 #include "alife_registry_wrappers.h"
+// stalker-bot B12: the actor's movement keys this frame (wished) and what it does (real: mcClimb on a ladder...)
+static u32 bot_actor_input()
+{
+    return Actor() ? Actor()->bot_wished_moves() : 0;
+}
+static u32 bot_actor_state()
+{
+    return Actor() ? Actor()->MovingState() : 0;
+}
+
 static void bot_take_body_info(u16 id)
 {
     if (!Actor())
@@ -1572,7 +1582,7 @@ void CLevel::script_register(lua_State* L)
 
             def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("portal_view_roll", &portal_view_roll), def("ray_query_normal", &ray_query_normal), // portal-mod
             def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position),
-            def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
+            def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_actor_input", &bot_actor_input), def("bot_actor_state", &bot_actor_state), /* stalker-bot B12 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
             def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_tasks", &bot_tasks), // stalker-bot B2
             def("bot_trade_price", &bot_trade_price), def("bot_trade", &bot_trade), // stalker-bot B4
             def("bot_take_from_box", &bot_take_from_box), // stalker-bot B5

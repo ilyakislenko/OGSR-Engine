@@ -453,6 +453,7 @@ public:
     bool is_jump();
     bool is_crouch();
     u32 MovingState() const { return mstate_real; }
+    u32 bot_wished_moves() const { return mstate_wishful; } // stalker-bot B12: the player's own movement keys
 
     IC float GetJumpSpeed() const { return m_fJumpSpeed; }
     IC float GetWalkAccel() const { return m_fWalkAccel; }
