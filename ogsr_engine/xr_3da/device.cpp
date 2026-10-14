@@ -68,7 +68,8 @@ void CRenderDevice::End()
 
         const HWND insertPos = IsDebuggerPresent() ? HWND_NOTOPMOST : HWND_TOPMOST;
 
-        SetWindowPos(Device.m_hWnd, insertPos, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        if (!strstr(Core.Params, "-noactivate")) // stalker-bot B10
+            SetWindowPos(Device.m_hWnd, insertPos, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
         dwPrecacheFrame--;
 
@@ -84,7 +85,8 @@ void CRenderDevice::End()
 
         if (0 == dwPrecacheFrame)
         {
-            SetWindowPos(Device.m_hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+            if (!strstr(Core.Params, "-noactivate")) // stalker-bot B10
+                SetWindowPos(Device.m_hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 
             //m_pRender->updateGamma();
             
@@ -408,6 +410,11 @@ void CRenderDevice::message_loop()
 
 void CRenderDevice::ShowMainWindow() const
 {
+    if (strstr(Core.Params, "-noactivate")) // stalker-bot B10: the user's own window keeps the focus and the mouse
+    {
+        ShowWindow(m_hWnd, SW_SHOWNOACTIVATE);
+        return;
+    }
     ShowWindow(m_hWnd, SW_SHOWNORMAL);
     SetForegroundWindow(m_hWnd);
     SetWindowPos(m_hWnd, nullptr, 0, 0, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);

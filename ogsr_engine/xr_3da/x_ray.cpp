@@ -401,7 +401,8 @@ int APIENTRY WinMain_impl(HINSTANCE hInstance, HINSTANCE hPrevInstance, char* lp
 
     DisableProcessWindowsGhosting();
 
-    ShowSplash(hInstance);
+    if (!strstr(lpCmdLine, "-nosplash")) // stalker-bot B10: no topmost logo over the user's windows
+        ShowSplash(hInstance);
 
     LPCSTR fsgame_ltx_name = "-fsltx ";
     string_path fsgame = "";
