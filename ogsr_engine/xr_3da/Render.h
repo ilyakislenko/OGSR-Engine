@@ -382,6 +382,7 @@ struct PORTAL_MOD_DRAW
 };
 ENGINE_API extern PORTAL_MOD_DRAW portal_mod_draw[2];
 ENGINE_API extern bool portal_mod_pass; // portal-mod E2: true while the renderer draws the view through a portal
+ENGINE_API extern bool portal_mod_view_prev; // portal-mod E19: last frame rendered a view through a portal
 ENGINE_API extern Fmatrix portal_mod_full_std; // portal-mod E2: that view's full transform without the oblique near plane
 
 extern Fvector4 ps_ssfx_grass_interactive;

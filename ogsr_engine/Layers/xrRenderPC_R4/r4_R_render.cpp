@@ -589,7 +589,7 @@ void CRender::render_forward()
         // portal-mod: Portal 2 portals (xr_3da/Render.h portal_mod_draw, set from Lua by level.portal_set)
         for (const auto& portal : portal_mod_draw)
         {
-            if (portal_mod_pass || !portal.on || !ViewBase.testSphere_dirty(portal.xform.c, std::max(portal.xform.i.magnitude(), portal.xform.j.magnitude())))
+            if (!portal.on || !ViewBase.testSphere_dirty(portal.xform.c, std::max(portal.xform.i.magnitude(), portal.xform.j.magnitude())))
                 continue;
 
             Fvector to_portal; // portal-mod E2: a portal seen from behind is not there (it is on the other side of a wall)
@@ -599,7 +599,7 @@ void CRender::render_forward()
 
             cmd_list.set_Shader(Target->s_portal_gun);
             cmd_list.set_xform_world(portal.xform);
-            cmd_list.set_c("portal_params", portal.params.x, portal.params.y, portal.params.z, portal.params.w);
+            // portal-mod E19: through a portal (the pass) the entry one shows last frame's view - Portal 2's tunnel
 
             // portal-mod E10: the second quad behind the surface only when the camera is right at the portal (closer than
             // the near plane can show it); otherwise it would peek over a fence or through the gaps between its boards
@@ -608,7 +608,7 @@ void CRender::render_forward()
             rel.sub(Device.vCameraPosition, portal.xform.c);
             const bool close = -to_portal.dotproduct(portal.xform.k) < 0.6f && _abs(rel.dotproduct(portal.xform.i)) / hw < hw + 0.4f &&
                 _abs(rel.dotproduct(portal.xform.j)) / hh < hh + 0.4f;
-            cmd_list.Render(close ? 12 : 6);
+            cmd_list.Render(close && !portal_mod_pass ? 12 : 6);
         }
 
         dsgraph.r_dsgraph_render_graph(1); // normal level, secondary priority

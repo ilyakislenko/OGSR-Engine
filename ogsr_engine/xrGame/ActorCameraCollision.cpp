@@ -14,6 +14,8 @@
 #include "PhysicsShellHolder.h"
 
 #include "GeometryBits.h"
+#include "Geometry.h" // portal-mod E16
+#include "ExtendedGeom.h" // portal-mod E16
 
 /*
 #ifdef DEBUG
@@ -204,6 +206,32 @@ CPhysicsShell* create_camera_shell(CPhysicsShellHolder* actor)
 }
 
 const u16 cam_correction_steps_num = 10;
+
+// portal-mod E16: the actor was teleported; the camera box's collider memory (the triangle it was behind, pushing
+// out of it, the cached triangles) stays at the old place, else the box is pushed towards a wall there every frame
+void portal_mod_camera_forget()
+{
+    if (!actor_camera_shell)
+        return;
+    for (CPhysicsElement* el : actor_camera_shell->Elements())
+    {
+        for (u16 g = 0; g < el->numberOfGeoms(); ++g)
+        {
+            CODEGeom* G = el->geometry(g);
+            if (!G || !G->geometry_transform())
+                continue;
+            dGeomID gid = G->geom();
+            if (!gid)
+                gid = G->geometry_transform();
+            if (!dGeomGetUserData(gid))
+                continue;
+            dGeomUserDataResetLastPos(gid);
+            dGeomGetUserData(gid)->pushing_neg = false;
+            dGeomGetUserData(gid)->pushing_b_neg = false;
+            G->clear_cashed_tries();
+        }
+    }
+}
 
 void update_current_entity_camera_collision(CPhysicsShellHolder* l_actor)
 {

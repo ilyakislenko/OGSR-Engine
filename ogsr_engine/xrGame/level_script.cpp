@@ -38,6 +38,7 @@
 #include "LevelDebugScript.h"
 #include "CharacterPhysicsSupport.h" // portal-mod
 #include "PHMovementControl.h"
+#include "PHSimpleCharacter.h" // portal-mod E17
 
 // portal-mod: Lua side of the Portal 2 portals and the actor's velocity (momentum through portals)
 static void portal_set(int idx, Fvector pos, Fvector normal, Fvector up, float w, float h, float color, bool linked, float open)
@@ -98,6 +99,13 @@ static void portal_set_actor_position(Fvector p) // portal-mod E12
 {
     if (CActor* a = Actor())
         a->portal_mod_place(p);
+}
+
+static void portal_fly_actor(Fvector v) // portal-mod E17: out of a portal at speed (flies, see CPHSimpleCharacter)
+{
+    if (CActor* a = Actor())
+        if (auto* ch = dynamic_cast<CPHSimpleCharacter*>(a->character_physics_support()->movement()->PHCharacter()))
+            ch->portal_mod_fly(v);
 }
 
 static void set_actor_velocity(Fvector v)

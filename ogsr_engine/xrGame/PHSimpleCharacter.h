@@ -120,9 +120,11 @@ protected:
     bool b_death_pos;
     bool b_foot_mtl_check;
     dReal m_friction_factor;
+    bool m_portal_fly = false; // portal-mod E17: out of a portal faster than a run, flying until down to a run
 
 public:
     CPHSimpleCharacter();
+    void portal_mod_fly(const Fvector& v); // portal-mod E17
     virtual ~CPHSimpleCharacter() { Destroy(); }
 
     /////////////////CPHObject//////////////////////////////////////////////

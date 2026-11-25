@@ -621,6 +621,29 @@ void CPHSimpleCharacter::PhTune(dReal step)
          || fis_zero(linear_vel_smag) || m_elevator_state.ClimbingState()))
         b_lose_control = false;
 
+    // portal-mod E17: out of a portal faster than a run it keeps flying (touching the ground would give the control
+    // back and the controller cuts the speed to a run at once); on the ground it skids down to a run
+    if (m_portal_fly)
+    {
+        const float run = _max(m_max_velocity / phTimefactor, 5.f) * 1.25f;
+        if (m_elevator_state.ClimbingState() || linear_vel_smag < run * run)
+            m_portal_fly = false;
+        else
+        {
+            b_lose_control = true;
+            if (b_on_ground)
+            {
+                // portal-mod E20: Source's ground friction (Portal 2: sv_friction 4, sv_stopspeed 100 units = 1.9 m/s)
+                const dReal sp = _sqrt(velocity[0] * velocity[0] + velocity[2] * velocity[2]);
+                if (sp > EPS_L)
+                {
+                    const dReal k = _max(sp - _max(sp, 1.9f) * 4.f * fixed_step, 0.f) / sp;
+                    dBodySetLinearVel(m_body, velocity[0] * k, velocity[1], velocity[2] * k);
+                }
+            }
+        }
+    }
+
     if (b_jumping && b_good_graund || (m_elevator_state.ClimbingState() && b_valide_wall_contact)) // b_good_graund=b_valide_ground_contact&&m_ground_contact_normal[1]>M_SQRT1_2
         b_jumping = false;
 
@@ -1024,6 +1047,19 @@ void CPHSimpleCharacter::SetPosition(Fvector pos)
     dGeomGetUserData(m_hat)->pushing_neg = false;
     dGeomGetUserData(m_geom_shell)->pushing_neg = false;
     dGeomGetUserData(m_hat)->pushing_neg = false;
+    // portal-mod E15: a teleport, so the collider's memory of the old place goes (last position, cached
+    // triangles, the triangle it was behind); else the first step collides along the jump
+    dGeomID geoms[] = {m_wheel, m_hat, m_geom_shell, m_cap};
+    for (dGeomID g : geoms)
+    {
+        if (!g || !dGeomGetUserData(g))
+            continue;
+        dGeomUserDataResetLastPos(g);
+        dGeomUserDataClearCashedTries(g);
+        dxGeomUserData* d = dGeomGetUserData(g);
+        d->neg_tri = d->b_neg_tri = NULL;
+        d->pushing_neg = d->pushing_b_neg = false;
+    }
 
     dBodySetPosition(m_body, pos.x, pos.y + m_radius, pos.z);
     CPHDisablingTranslational::Reinit();
@@ -1167,6 +1203,22 @@ void CPHSimpleCharacter::CapturedSetPosition(const dReal* position)
 void CPHSimpleCharacter::CheckCaptureJoint()
 {
     // m_capture_joint_feedback
+}
+
+// portal-mod E17: out of a portal with velocity v; faster than a run it flies (see PhDataUpdate)
+void CPHSimpleCharacter::portal_mod_fly(const Fvector& v)
+{
+    if (!b_exist)
+        return;
+    Enable();
+    SetVelocity(v);
+    const float run = _max(m_max_velocity / phTimefactor, 5.f) * 1.25f;
+    if (v.square_magnitude() > run * run)
+    {
+        b_lose_control = true;
+        b_jump = false;
+        m_portal_fly = true;
+    }
 }
 
 void CPHSimpleCharacter::doCaptureExist(bool& do_exist) { do_exist = !!m_capture_joint; }
@@ -1542,6 +1594,8 @@ void CPHSimpleCharacter::InitContact(dContact* c, bool& do_collide, u16 material
     {
         MulSprDmp(c->surface.soft_cfm, c->surface.soft_erp, spring_rate, soft_param);
         c->surface.mu *= (1.f + b_clamb_jump * 3.f) * m_friction_factor;
+        if (m_portal_fly)
+            c->surface.mu = 0.f; // portal-mod E20: flying out of a portal, the ground's friction is Source's (PhDataUpdate)
     }
     UpdateStaticDamage(c, tri_material, bo1);
 }

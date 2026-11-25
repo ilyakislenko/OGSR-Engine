@@ -451,6 +451,8 @@ extern void render_reshade_effects();
 // portal-mod E2: render the view through the linked portal the camera looks at (xr_3da/Render.h portal_mod_draw).
 static void portal_mod_render_view()
 {
+    // portal-mod E19: rt_portal0 holds last frame's view when one was rendered - the portals the pass draws show it
+    portal_mod_view_prev = portal_mod_draw[0].params.w > 0.5f || portal_mod_draw[1].params.w > 0.5f;
     portal_mod_draw[0].params.w = 0.f;
     portal_mod_draw[1].params.w = 0.f;
     if (!portal_mod_draw[0].on || !portal_mod_draw[1].on || portal_mod_draw[0].params.y < 0.5f)
@@ -503,6 +505,12 @@ static void portal_mod_render_view()
     on_plane.mad(B.c, nB, 0.03f); // a few cm in front of the exit wall, so the wall itself is cut away
     Fplane clip;
     clip.build(on_plane, nB);
+    // portal-mod E18: the player through the portal - the first-person view hides the actor's model, the portal
+    // pass shows it (body and the gun in its hands) and hides it again for the main view
+    CActor* me = smart_cast<CActor*>(Level().CurrentViewEntity());
+    const bool show_me = me && !me->getVisible() && me->g_Alive() && !me->Holder();
+    if (show_me)
+        me->setVisible(TRUE);
     Render->RenderPortalView(pos, dir, top, clip);
     portal_mod_draw[entry].params.w = 1.f;
 }

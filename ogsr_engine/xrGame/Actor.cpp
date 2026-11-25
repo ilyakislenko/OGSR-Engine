@@ -1291,6 +1291,8 @@ void CActor::SetPhPosition(const Fmatrix& transform)
     // else m_phSkeleton->S
 }
 
+void portal_mod_camera_forget(); // portal-mod E16 (ActorCameraCollision.cpp)
+
 void CActor::ForceTransform(const Fmatrix& m)
 {
     if (!g_Alive())
@@ -1303,6 +1305,7 @@ void CActor::ForceTransform(const Fmatrix& m)
     character_physics_support()->set_movement_position(m.c);
     character_physics_support()->movement()->SetVelocity(0, 0, 0);
     fPrevCamPos = m.c.y; // portal-mod E10: no stair-step camera smoothing after a teleport (it dipped the view)
+    portal_mod_camera_forget(); // portal-mod E16: the camera box forgets the old place too
 }
 
 // portal-mod E12: out of a portal the body is half inside the exit wall (a hole for it); the activation box of
@@ -1317,6 +1320,7 @@ void CActor::portal_mod_place(const Fvector& p)
         mc->EnableCharacter();
     mc->SetPosition(p);
     fPrevCamPos = p.y;
+    portal_mod_camera_forget(); // portal-mod E16
 }
 
 void CActor::ForceTransformAndDirection(const Fmatrix& m)
