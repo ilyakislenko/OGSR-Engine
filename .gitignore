@@ -37,3 +37,5 @@ $RECYCLE.BIN/
 /OGSR_Engine_private.cdproj
 
 ogsr_build_info.hpp
+# portal-mod: build logs
+/build*.log
