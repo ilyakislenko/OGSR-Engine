@@ -18,6 +18,7 @@
 #include "actorEffector.h"
 #include "CustomOutfit.h"
 #include "HUDTarget.h"
+#include "portal_mod_lights.h" // portal-mod E75
 
 static const float TIME_2_HIDE = 5.f;
 static const float TORCH_INERTION_CLAMP = PI_DIV_6;
@@ -203,6 +204,7 @@ void CTorch::Switch()
 
 void CTorch::Switch(bool light_on)
 {
+    light_on = portal_mod_lights::torch_switch(this, light_on); // portal-mod E75: a broken torch stays dark
     if (auto pActor = smart_cast<CActor*>(H_Parent()); pActor && pActor->g_Alive())
     {
         if (light_on && !m_switched_on)

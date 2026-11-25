@@ -11,6 +11,7 @@
 #include "game_object_space.h"
 #include "script_callback_ex.h"
 #include "script_game_object.h"
+#include "portal_mod_lights.h" // portal-mod E75
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
 //////////////////////////////////////////////////////////////////////
@@ -286,6 +287,8 @@ void CHangingLamp::UpdateCL()
 
 void CHangingLamp::TurnOn()
 {
+    if (portal_mod_lights::lamp_turn_on_blocked(this)) // portal-mod E75: a broken lamp stays dark
+        return;
     lights_turned_on = true;
     light_render->set_active(true);
     if (light_ambient)
@@ -329,6 +332,7 @@ void CHangingLamp::Hit(SHit* pHDS)
 
     if (bWasAlive && (!Alive()))
         TurnOff();
+    portal_mod_lights::lamp_hit(this, pHDS, bWasAlive); // portal-mod E75: glass, sparks, kept in saves
 }
 
 static BONE_P_MAP bone_map = BONE_P_MAP();

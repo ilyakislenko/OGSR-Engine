@@ -7,6 +7,7 @@
 #include "Level_Bullet_Manager.h"
 #include "portal_mod_replay.h" // portal-mod E53
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_lights.h" // portal-mod E75: lights break
 #include "game_cl_base.h"
 #include "Actor.h"
 #include "gamepersistent.h"
@@ -250,6 +251,18 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
         }
     }
 
+    // portal-mod E75: a lit head torch on the way takes the round (the step stops there; not through a portal beyond it)
+    int pm_torch = -1;
+    const Fvector pm_from = bullet->pos;
+    {
+        const float pm_r = portal_mod_lights::torch_clip(bullet, bullet->pos, bullet->dir, range, pm_torch);
+        if (pm_torch >= 0)
+        {
+            range = pm_r;
+            portal_in = -1;
+        }
+    }
+
     BOOL result = FALSE;
     if (range > EPS_L)
     {
@@ -258,6 +271,20 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
         result = Level().ObjectSpace.RayQuery(rq_storage, RD, firetrace_callback, &bullet_data, test_callback, NULL);
     }
 
+    { // portal-mod E75: the step flown passes a bulb or ends in the level at a lamp's fixture; a torch took the round
+        const bool pm_stop = result && bullet_data.bStopTracing;
+        const collide::rq_result* pm_last = pm_stop ? rq_storage.r_begin() + rq_storage.r_count() - 1 : nullptr;
+        portal_mod_lights::bullet_step(bullet, pm_from, cur_dir, pm_stop ? pm_last->range : range, pm_stop && !pm_last->O);
+        if (pm_torch >= 0 && !pm_stop)
+        {
+            Fvector pm_at;
+            pm_at.mad(pm_from, cur_dir, range);
+            portal_mod_lights::torch_reached(bullet, pm_torch, pm_at, cur_dir);
+            bullet->pos = pm_at;
+            bullet->fly_dist += range;
+            return false;
+        }
+    }
     if (result && bullet_data.bStopTracing)
     {
         range = (rq_storage.r_begin() + rq_storage.r_count() - 1)->range;
@@ -509,6 +536,7 @@ void CBulletManager::Render()
 void CBulletManager::CommitRenderSet() // @ the end of frame
 {
     m_BulletsRendered = m_Bullets;
+    portal_mod_lights::snapshot(); // portal-mod E75: the bulbs and torches the bullets' thread tests
     // portal-mod E4: the worker thread reads the portals from here, not from what Lua may change meanwhile
     m_portals_linked = portal_mod::linked() && portal_mod::get_frame(0, m_pf[0]) && portal_mod::get_frame(1, m_pf[1]);
     if (const u32 n = portal_mod_bullets.exchange(0)) // portal-mod E5
@@ -553,6 +581,8 @@ void CBulletManager::CommitEvents() // @ the start of frame
 
     if (m_Bullets.empty())
         m_dwTimeRemainder = 0;
+
+    portal_mod_lights::commit(); // portal-mod E75: what the bullets broke, the player's torch
 }
 
 void CBulletManager::RegisterEvent(EventType Type, BOOL _dynamic, SBullet* bullet, const Fvector& end_point, collide::rq_result& R, u16 tgt_material)

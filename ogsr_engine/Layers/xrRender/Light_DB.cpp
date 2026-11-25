@@ -113,6 +113,23 @@ void CLight_DB::Unload()
     sun_adapted.destroy();
 }
 
+// portal-mod E75: the level's hemi lights (build_lights: they light dynamic objects) within r of p on or off - a broken
+// lamp's go out with it (xrGame/portal_mod_lights.cpp); how many changed
+u32 portal_mod_hemi_set(const Fvector& p, float r, bool on)
+{
+    u32 n = 0;
+    for (ref_light& R : RImplementation.Lights.v_hemi)
+    {
+        light* L = static_cast<light*>(R._get());
+        if (L && L->position.distance_to(p) <= r && L->get_active() != on)
+        {
+            L->set_active(on);
+            ++n;
+        }
+    }
+    return n;
+}
+
 light* CLight_DB::Create()
 {
     light* L = xr_new<light>();

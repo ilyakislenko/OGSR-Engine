@@ -17,6 +17,7 @@ class CPHElement;
 class CHangingLamp : public CPhysicsShellHolder, public CPHSkeleton
 { // need m_pPhysicShell
     typedef CPhysicsShellHolder inherited;
+    friend struct portal_mod_lamp_access; // portal-mod E75: lights break (portal_mod_lights.cpp)
 
 private:
     u16 light_bone;
