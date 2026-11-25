@@ -600,6 +600,29 @@ void R_dsgraph_structure::add_leafs_static(dxRender_Visual* pVisual)
     }
 }
 
+
+// portal-mod E58: a falling or fallen tree (Layers/xrRenderPC_R4/r4_loader.cpp) - its FLOD is out of the static walk,
+// its parts go in here where it is now
+struct PortalModMovedTree
+{
+    Fsphere sphere;
+    dxRender_Visual* const* parts;
+    u32 n;
+};
+extern xr_vector<PortalModMovedTree> portal_mod_moved_trees;
+void R_dsgraph_structure::pm_add_trees(const CFrustum& view)
+{
+    for (const PortalModMovedTree& t : portal_mod_moved_trees)
+    {
+        if (!view.testSphere_dirty(t.sphere.P, t.sphere.R))
+            continue;
+        if (max_render_distance > 0.f && render_position.distance_to(t.sphere.P) - t.sphere.R > max_render_distance)
+            continue;
+        for (u32 k = 0; k < t.n; ++k)
+            r_dsgraph_insert_static(t.parts[k]);
+    }
+}
+
 void R_dsgraph_structure::add_static(dxRender_Visual* pVisual, const CFrustum& view, u32 planes)
 {
     ZoneScoped;
@@ -699,6 +722,8 @@ void R_dsgraph_structure::build_subspace(const IRender_Sector::sector_id_t& star
             }
         }
     }
+
+    pm_add_trees(frustum); // portal-mod E58
 
     if (add_dynamic)
     {

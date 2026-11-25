@@ -7,6 +7,10 @@
 
 float g_fSCREEN;
 
+// portal-mod E58: falling trees (r4_loader.cpp)
+bool portal_mod_trees_pending();
+void portal_mod_trees_apply();
+
 extern float r_dtex_paralax_range;
 extern float r_ssaDISCARD;
 extern float r_ssaLOD_A;
@@ -384,6 +388,12 @@ void CRender::Calculate()
         return;
 
     ZoneScopedN("r2_calculate");
+
+    if (portal_mod_trees_pending()) // portal-mod E58: a tree's new matrix while nothing walks the visuals
+    {
+        r_main.wait_static();
+        portal_mod_trees_apply();
+    }
 
     //IMainMenu* pMainMenu = g_pGamePersistent ? g_pGamePersistent->m_pMainMenu : 0;
     //bool bMenu = pMainMenu ? pMainMenu->CanSkipSceneRendering() : false;

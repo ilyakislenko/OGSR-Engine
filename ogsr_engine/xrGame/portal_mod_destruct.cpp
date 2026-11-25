@@ -26,6 +26,7 @@
 #include "portal_mod_destruct.h"
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "portal_mod_props.h" // portal-mod E57: breakable props (their update and reset ride on this module's)
+#include "portal_mod_trees.h" // portal-mod E58: falling trees (the same)
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "ParticlesObject.h"
@@ -2925,6 +2926,8 @@ float ammo_damage(LPCSTR ammo)
 
 void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& normal, u16 target_material)
 {
+    if (b.pm_destruct > 0.f) // E58: a round on a trunk (the trees' own switch)
+        portal_mod_trees::bullet_hit(point, b.dir, tri, b.pm_destruct * (b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f));
     if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || b.pm_destruct <= 0.f) // portal-mod E55: My Mods
         return;
     const float sp = b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f;
@@ -2946,6 +2949,7 @@ bool hole_pass(const Fvector& p) { return !S.holes.empty() && hole_contains(p, 0
 void explosion(const Fvector& pos, float radius, float hit, float impulse)
 {
     portal_mod_props::explosion(pos, radius, hit, impulse); // E57: the props round it (their own switch)
+    portal_mod_trees::explosion(pos, radius, hit, impulse); // E58: the trees round it (the same)
     if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
         return;
     blast_dents(pos, radius, hit); // E56: the faces round it, on any level
@@ -3173,12 +3177,14 @@ void update()
     {
         update_body();
         portal_mod_props::update(); // E57
+        portal_mod_trees::update(); // E58
         return;
     }
     CTimer t;
     t.Start();
     update_body();
     portal_mod_props::update(); // E57
+    portal_mod_trees::update(); // E58
     prof::upd = t.GetElapsed_sec() * 1000.f;
 }
 
@@ -3196,11 +3202,13 @@ void shutdown()
     stash(); // E54d: the level's destruction kept for when the player comes back (or the game is saved elsewhere)
     reset();
     portal_mod_props::reset(); // E57: the props' pieces' bodies go before the physics world too
+    portal_mod_trees::reset(); // E58: the fallen trees kept, their trunks' boxes go
     loop_fx.clear(); // E57: the level's end destroys every particle system itself
 }
 
 void save_game(LPCSTR sav_path)
 {
+    portal_mod_trees::save_game(sav_path); // E58: <save>.sav.trees
     if (!sav_path || !*sav_path)
         return;
     stash();
@@ -3228,6 +3236,7 @@ void save_game(LPCSTR sav_path)
 
 void load_game(LPCSTR sav_path)
 {
+    portal_mod_trees::load_game(sav_path); // E58
     ++G.gen;
     G.levels.clear();
     portal_mod_props::reset(); // E57: the props come back with the save's objects, their pieces go
@@ -3495,25 +3504,41 @@ float lua_hole_at(const Fvector& pos)
 } // namespace portal_mod_destruct
 
 // ------------------------------------------------------------------------------------------------------------- load hooks
+// E58: three vertices far under the level on every level, for the triangles that leave the collision (a fallen tree's)
+u32 g_pm_cform_sink = u32(-1);
+static bool cform_with_sink(const Fvector* verts, size_t nv, const CDB::TRI* tris, size_t nt, xr_vector<Fvector>& out_v, xr_vector<CDB::TRI>& out_t)
+{
+    out_v.reserve(nv + 3);
+    out_v.assign(verts, verts + nv);
+    out_t.resize(nt);
+    CopyMemory(out_t.data(), tris, nt * sizeof(CDB::TRI)); // (unaligned in the file: copied as bytes)
+    g_pm_cform_sink = (u32)out_v.size();
+    out_v.push_back(Fvector{0.f, -9000.f, 0.f});
+    out_v.push_back(Fvector{0.02f, -9000.f, 0.f});
+    out_v.push_back(Fvector{0.f, -9000.f, 0.02f});
+    return true;
+}
+
 bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* tris, size_t nt, xr_vector<Fvector>& out_v, xr_vector<CDB::TRI>& out_t)
 {
     using namespace portal_mod_destruct;
     reset();
     load_cfg();
+    g_pm_cform_sink = u32(-1);
     if (!C.enabled)
-        return false;
+        return cform_with_sink(verts, nv, tris, nt, out_v, out_t); // E58
     string_path fn;
     if (!FS.exist(fn, fsgame::level, "level.pmd"))
-        return false;
+        return cform_with_sink(verts, nv, tris, nt, out_v, out_t); // E58
     IReader* F = FS.r_open(fn);
     if (!F)
-        return false;
+        return cform_with_sink(verts, nv, tris, nt, out_v, out_t); // E58
     const bool ok = read_pmd(*F, nv, nt);
     FS.r_close(F);
     if (!ok || S.pieces.empty())
     {
         reset();
-        return false;
+        return cform_with_sink(verts, nv, tris, nt, out_v, out_t); // E58
     }
     xr_vector<u8> cut(nt, 0);
     xr_map<u16, u32> sectors;
@@ -3574,6 +3599,7 @@ bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* 
         out_t.push_back(t);
     }
     S.sink = (u32)out_v.size();
+    g_pm_cform_sink = S.sink; // E58: the trees' too
     out_v.push_back(Fvector{0.f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.02f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.f, -9000.f, 0.02f});

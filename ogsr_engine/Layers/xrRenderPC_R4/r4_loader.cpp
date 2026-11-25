@@ -156,6 +156,7 @@ void CRender::level_Load(IReader* fs)
     b_loaded = TRUE;
 }
 
+void portal_mod_trees_unload(); // portal-mod E58b
 void CRender::level_Unload()
 {
     if (nullptr == g_pGameLevel)
@@ -172,6 +173,8 @@ void CRender::level_Unload()
     Msg("~ LevelResources - lmap: %d, %d K", c_lmaps, m_lmaps / 1024);
 
     u32 I;
+
+    portal_mod_trees_unload(); // portal-mod E58: the trees' list goes with the visuals
 
     // HOM
     HOM.Unload();
@@ -279,6 +282,177 @@ int portal_mod_sun_cascade(u32 context_id)
 // portal-mod E56: a render context drawing a shadow map, any light's (xrGame/portal_mod_destruct.cpp: a dent's bowl casts none)
 bool portal_mod_ctx_smap(u32 context_id) { return RImplementation.get_context(context_id).phase == CRender::PHASE_SMAP; }
 void portal_mod_render_queue_ib(bool fast, u32 ib, const u16* data, u32 count) { portal_mod_ib_jobs.push_back(PortalModIbJob{fast, ib, xr_vector<u16>(data, data + count)}); }
+
+// portal-mod E58: falling trees (xrGame/portal_mod_trees.cpp). Every MU instance of the level - an FLOD and its parts
+// (trunk, branches, the cut; each part drawn instanced by the instance's own 3x4 matrix in tree_data) - is listed once.
+// The game queues a new matrix (the parts' instance data and boxes follow, the FLOD leaves the static walk and
+// R_dsgraph_structure::pm_add_trees puts the parts in each pass where they are now) or hides the tree; CRender::Calculate
+// applies the queue once the static calc is waited (nothing walks the visuals then).
+#include "../xrRender/FLOD.h"
+struct PortalModMovedTree
+{
+    Fsphere sphere;
+    dxRender_Visual* const* parts;
+    u32 n;
+};
+xr_vector<PortalModMovedTree> portal_mod_moved_trees;
+namespace
+{
+struct PmTree
+{
+    dxRender_Visual* lod{};
+    xr_vector<dxRender_Visual*> parts;
+    xr_vector<Fbox> box0; // the parts' boxes in place
+    Fbox lod_box0{};
+    Fmatrix xf0{};
+    Fsphere sphere{};
+    u32 flags{};
+    int state{};
+};
+struct PmTreeJob
+{
+    u32 i;
+    Fmatrix xf;
+    int state;
+};
+xr_vector<PmTree> pm_trees;
+xr_vector<PmTreeJob> pm_tree_jobs;
+bool pm_trees_built{};
+
+Fmatrix pm_tree_xf(const dxRender_Visual* v)
+{
+    const float* d = v->tree_data.data; // rows of the 3x4: (i.x j.x k.x c.x) (i.y j.y k.y c.y) (i.z j.z k.z c.z)
+    Fmatrix m;
+    m.i.set(d[0], d[4], d[8]);
+    m.j.set(d[1], d[5], d[9]);
+    m.k.set(d[2], d[6], d[10]);
+    m.c.set(d[3], d[7], d[11]);
+    m._14 = m._24 = m._34 = 0.f;
+    m._44 = 1.f;
+    return m;
+}
+
+void pm_tree_write(dxRender_Visual* v, const Fmatrix& m)
+{
+    float* d = v->tree_data.data;
+    d[0] = m.i.x, d[1] = m.j.x, d[2] = m.k.x, d[3] = m.c.x;
+    d[4] = m.i.y, d[5] = m.j.y, d[6] = m.k.y, d[7] = m.c.y;
+    d[8] = m.i.z, d[9] = m.j.z, d[10] = m.k.z, d[11] = m.c.z;
+}
+
+void pm_trees_build()
+{
+    pm_trees_built = true;
+    pm_trees.clear();
+    for (dxRender_Visual* v : RImplementation.Visuals)
+    {
+        if (!v || v->Type != MT_LOD)
+            continue;
+        FLOD* L = smart_cast<FLOD*>(v);
+        if (!L || L->children.empty())
+            continue;
+        bool all = true;
+        for (dxRender_Visual* c : L->children)
+            all = all && c && (c->Type == MT_TREE_ST || c->Type == MT_TREE_PM);
+        if (!all)
+            continue;
+        PmTree t;
+        t.lod = L;
+        t.parts = L->children;
+        t.lod_box0 = L->getVisData().box;
+        t.xf0 = pm_tree_xf(L->children[0]);
+        for (dxRender_Visual* c : L->children)
+        {
+            t.box0.push_back(c->getVisData().box);
+            const shared_str info = c->getDebugInfo();
+            LPCSTR sh = c->shader && c->shader->dbg_shader_name.size() ? c->shader->dbg_shader_name.c_str() : "";
+            if (strstr(sh, "flora\\") || (info.size() && strstr(info.c_str(), "flora\\")))
+                t.flags |= 1;
+            if (strstr(sh, "trunk") || (info.size() && strstr(info.c_str(), "trunk")))
+                t.flags |= 2;
+        }
+        pm_trees.push_back(std::move(t));
+    }
+    u32 flora = 0;
+    for (const PmTree& t : pm_trees)
+        flora += t.flags & 1;
+    Msg("* [trees] the renderer lists %u MU instances, %u with flora shaders", (u32)pm_trees.size(), flora);
+}
+} // namespace
+
+u32 portal_mod_tree_count()
+{
+    if (!pm_trees_built && !RImplementation.Visuals.empty())
+        pm_trees_build();
+    return (u32)pm_trees.size();
+}
+
+bool portal_mod_tree_get(u32 i, Fmatrix& xf, Fbox& box, u32& flags)
+{
+    if (i >= pm_trees.size())
+        return false;
+    xf = pm_trees[i].xf0;
+    box = pm_trees[i].lod_box0;
+    flags = pm_trees[i].flags;
+    return true;
+}
+
+void portal_mod_tree_set(u32 i, const Fmatrix& xf, int state) { pm_tree_jobs.push_back(PmTreeJob{i, xf, state}); }
+
+bool portal_mod_trees_pending() { return !pm_tree_jobs.empty(); }
+
+void portal_mod_trees_apply()
+{
+    bool moved_changed = false;
+    for (const PmTreeJob& j : pm_tree_jobs)
+    {
+        if (j.i >= pm_trees.size())
+            continue;
+        PmTree& t = pm_trees[j.i];
+        moved_changed |= (t.state == 1) != (j.state == 1);
+        t.state = j.state;
+        t.lod->setRZFlag(j.state == 0);
+        const Fmatrix& m = j.state == 1 ? j.xf : t.xf0;
+        Fmatrix inv, D;
+        inv.invert(t.xf0);
+        D.mul_43(m, inv); // world in place -> world now (X-Ray's mul(A, B): B first, then A)
+        for (u32 k = 0; k < t.parts.size(); ++k)
+        {
+            dxRender_Visual* v = t.parts[k];
+            pm_tree_write(v, m);
+            vis_data& vd = v->getVisData();
+            vd.box.xform(t.box0[k], D);
+            vd.box.getsphere(vd.sphere.P, vd.sphere.R);
+        }
+        Fbox b;
+        b.xform(t.lod_box0, D);
+        b.getsphere(t.sphere.P, t.sphere.R);
+    }
+    pm_tree_jobs.clear();
+    if (!moved_changed && !portal_mod_moved_trees.empty())
+    {
+        for (auto& mt : portal_mod_moved_trees) // the spheres moved
+            for (const PmTree& t : pm_trees)
+                if (t.parts.data() == mt.parts)
+                {
+                    mt.sphere = t.sphere;
+                    break;
+                }
+        return;
+    }
+    portal_mod_moved_trees.clear();
+    for (const PmTree& t : pm_trees)
+        if (t.state == 1)
+            portal_mod_moved_trees.push_back(PortalModMovedTree{t.sphere, t.parts.data(), (u32)t.parts.size()});
+}
+
+void portal_mod_trees_unload()
+{
+    pm_trees.clear();
+    pm_tree_jobs.clear();
+    portal_mod_moved_trees.clear();
+    pm_trees_built = false;
+}
 
 void CRender::LoadBuffers(CStreamReader* base_fs, BOOL _alternative)
 {

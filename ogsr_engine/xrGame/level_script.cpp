@@ -33,6 +33,7 @@
 #include "portal_mod_destruct.h" // portal-mod E54
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "portal_mod_props.h" // portal-mod E57: breakable props
+#include "portal_mod_trees.h" // portal-mod E58: falling trees
 #include "Car.h"
 #include "helicopter.h"
 #include "phworld.h"
@@ -1912,6 +1913,8 @@ void CLevel::script_register(lua_State* L)
             def("props_info", &portal_mod_props::lua_info), def("props_break", &portal_mod_props::lua_break), // portal-mod E57
             def("props_near", &portal_mod_props::lua_near),
             def("props_debug", &portal_mod_props::lua_debug), // portal-mod E57b: a log line for each hit on a prop
+            def("trees_info", &portal_mod_trees::lua_info), def("trees_near", &portal_mod_trees::lua_near), // portal-mod E58
+            def("trees_fell", &portal_mod_trees::lua_fell), def("trees_debug", &portal_mod_trees::lua_debug),
             def("pm_feature_set", &pm_feature_set), def("pm_feature", &pm_feature), def("pm_use_holder", &pm_use_holder), // portal-mod E55
             // portal-mod E53: the replay for filming (portal_mod_replay.cpp)
             def("replay_record", &pm_replay::lua_record), def("replay_recording", &pm_replay::lua_recording), def("replay_ring", &pm_replay::lua_ring),

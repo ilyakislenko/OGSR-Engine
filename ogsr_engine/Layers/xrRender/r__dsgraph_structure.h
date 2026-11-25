@@ -114,6 +114,7 @@ public:
     void add_leafs_dynamic(IRenderable* root, dxRender_Visual* pVisual, Fmatrix& xform); // if detected node's full visibility
 
     void r_dsgraph_insert_static(dxRender_Visual* pVisual);
+    void pm_add_trees(const CFrustum& view); // portal-mod E58: falling and fallen trees where they are now
     void r_dsgraph_insert_dynamic(IRenderable* root, dxRender_Visual* pVisual, Fmatrix& xform, Fvector& center);
 
     void r_dsgraph_render_graph_static(const u32 _priority, const bool skip_tree_branches = false);

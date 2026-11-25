@@ -157,6 +157,8 @@ void CRender::main_pass_static(R_dsgraph_structure& dsgraph)
             dsgraph.add_static(r_sector->root(), ViewBase, ViewBase.getMask());
         }
     }
+
+    dsgraph.pm_add_trees(ViewBase); // portal-mod E58: falling and fallen trees
 }
 
 void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
