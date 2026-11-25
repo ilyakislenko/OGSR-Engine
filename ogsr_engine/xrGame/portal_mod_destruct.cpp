@@ -940,6 +940,32 @@ u8 chip_class(u16 mtl_idx)
     return mtl_idx < S.mtl_class.size() ? S.mtl_class[mtl_idx] : 255;
 }
 
+// E62: a wall's thickness at P (its near face, `in` going into it): the static model's ray picks cull back faces, so a
+// closed wall's far face (facing away, along `in`) is never met by a ray on from inside it - only a wall drawn with both
+// sides of its faces is. Else a ray back from max_t past P meets the far face from its front: the thickness if one faces
+// on along `in` within max_t, else -1 (thicker, or nothing behind).
+float far_face(const Fvector& P, const Fvector& in, float max_t)
+{
+    collide::rq_result R;
+    Fvector p0;
+    p0.mad(P, in, 0.012f);
+    if (Level().ObjectSpace.RayPick(p0, in, max_t, collide::rqtStatic, R, nullptr) && R.element >= 0)
+        return R.range + 0.012f;
+    Fvector s, back;
+    s.mad(P, in, max_t + 0.012f);
+    back.invert(in);
+    if (!Level().ObjectSpace.RayPick(s, back, max_t, collide::rqtStatic, R, nullptr) || R.element < 0)
+        return -1.f;
+    const CDB::TRI& t = Level().ObjectSpace.GetStaticTris()[R.element];
+    const Fvector* V = Level().ObjectSpace.GetStaticVerts();
+    Fvector n;
+    n.mknormal(V[t.verts[0]], V[t.verts[1]], V[t.verts[2]]);
+    if (n.dotproduct(in) < 0.5f)
+        return -1.f; // not a face turned away from P: something else behind
+    const float thick = max_t + 0.012f - R.range;
+    return thick >= 0.012f ? thick : -1.f;
+}
+
 // E60: a sheet - tin, steel plate, slate (materials\tin, metal_plate, shifer): a garage's wall, a roof, a shed
 bool is_sheet(u16 mtl_idx)
 {
@@ -1064,13 +1090,10 @@ void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int p
     }
     else if (thin <= 0.f)
     {
-        // the far face: a ray on from just inside the wall (the static model has both sides of its faces)
-        collide::rq_result R;
-        Fvector p0;
-        p0.mad(point, dir, 0.012f);
-        if (!Level().ObjectSpace.RayPick(p0, dir, C.hole_max_thick, collide::rqtStatic, R, nullptr) || R.element < 0)
+        // the far face (E62: met from its front by a ray back if the wall is closed)
+        thick = far_face(point, dir, C.hole_max_thick);
+        if (thick < 0.f)
             return; // thicker than hole_max_thick (or one-sided): chips only
-        thick = R.range + 0.012f;
         if (thick < 0.03f)
             return;
     }
@@ -1177,12 +1200,10 @@ void breach_blast(const Fvector& pos, float hit)
         if (!Level().ObjectSpace.RayPick(o, in, 0.6f, collide::rqtStatic, R, nullptr) || R.element < 0 || _abs(R.range - 0.3f) > 0.08f)
             return;
     }
-    // the wall's thickness: its far face (the static model has both sides of its faces)
-    Fvector p0;
-    p0.mad(P, in, 0.012f);
-    if (!Level().ObjectSpace.RayPick(p0, in, C.breach_max_thick, collide::rqtStatic, R, nullptr) || R.element < 0)
+    // the wall's thickness: its far face (met from its front by a ray back if the wall is closed)
+    float thick = far_face(P, in, C.breach_max_thick);
+    if (thick < 0.f)
         return; // thicker, or one-sided: dents only
-    float thick = R.range + 0.012f;
     if (thick < 0.04f)
         return; // planks, a sheet: their own holes
     float rf = C.breach_k * _sqrt(hit) * _sqrt(_max(0.f, 1.f - best / C.breach_reach)) * C.breach_mat[mat] *
@@ -3728,11 +3749,9 @@ Fvector lua_wall_probe(const Fvector& from, const Fvector& dir_in, float range)
     if (cls >= NMAT)
         return out;
     out.z = float(cls) + (pc >= 0 ? 10.f : 0.f);
-    Fvector p0;
-    p0.mad(from, dir, R.range + 0.012f);
-    collide::rq_result R2;
-    if (Level().ObjectSpace.RayPick(p0, dir, C.hole_max_thick, collide::rqtStatic, R2, nullptr) && R2.element >= 0)
-        out.y = R2.range + 0.012f;
+    Fvector hit;
+    hit.mad(from, dir, R.range);
+    out.y = far_face(hit, dir, C.hole_max_thick); // E62: a closed wall's far face too
     return out;
 }
 
