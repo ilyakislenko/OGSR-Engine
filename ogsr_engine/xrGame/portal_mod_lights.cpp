@@ -943,6 +943,30 @@ void lamp_hit(CHangingLamp* l, const SHit* h, bool was_alive)
 
 bool lamp_turn_on_blocked(CHangingLamp* l) { return S.on && LA::health(l) <= 0.f; }
 
+// E75c: the sounds and the flashes' lights go with the level (made again at the next break) - a static's destructor
+// runs after the sound engine and the renderer are gone at exit (c0000005 in ~State, reported by the E73 session)
+void shutdown()
+{
+    for (Flash& f : S.flashes)
+        f.L->set_active(false);
+    S.flashes.clear();
+    for (xr_vector<ref_sound>* v : {&S.s_glass, &S.s_break, &S.s_pop, &S.s_sparks, &S.s_flicker, &S.s_click, &S.s_repair_start, &S.s_repair_end})
+    {
+        for (ref_sound& s : *v)
+            s.destroy();
+        v->clear();
+    }
+    S.sounds = false;
+    S.lamps.clear();
+    S.index.clear();
+    S.torches.clear();
+    S.t_lamps.clear();
+    S.t_torches.clear();
+    S.pend.clear();
+    S.level = nullptr; // the next level (or the save loaded) starts afresh
+    S.level_name = nullptr;
+}
+
 bool torch_switch(CTorch* t, bool on)
 {
     if (!on || !S.on || !t)

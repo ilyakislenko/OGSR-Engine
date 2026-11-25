@@ -38,6 +38,8 @@ void dynamic_hit(CObject* o, u16 bone, const Fvector& point, const Fvector& dir,
 void lamp_hit(CHangingLamp* l, const SHit* h, bool was_alive); // after the game's own Hit (a light bone hit kills it)
 bool lamp_turn_on_blocked(CHangingLamp* l); // a broken lamp is not turned on again (scripts' turn_on)
 
+void shutdown(); // E75c, CLevel::~CLevel (after the bullet manager): its sounds and flashes go with the level
+
 // torches (Torch.cpp, CTorch::Switch): what the switch really does - a broken one stays dark, the actor's starts its
 // repair out of fire
 bool torch_switch(CTorch* t, bool on);

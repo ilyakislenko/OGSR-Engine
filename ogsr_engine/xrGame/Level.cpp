@@ -35,6 +35,7 @@
 #include "portal_mod.h" // portal-mod E4
 #include "portal_mod_replay.h" // portal-mod E53
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_lights.h" // portal-mod E75c
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "PHShell.h"
 #include "PHObject.h"
@@ -206,6 +207,7 @@ CLevel::~CLevel()
     //	xr_delete					(m_pFogOfWar);
     // destroy bullet manager
     xr_delete(m_pBulletManager);
+    portal_mod_lights::shutdown(); // portal-mod E75c: its sounds and flashes go with the level (a static's sounds died after the sound engine at exit)
 
     //-----------------------------------------------------------
     xr_delete(m_ph_commander);
