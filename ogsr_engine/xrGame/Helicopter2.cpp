@@ -254,6 +254,7 @@ void CHelicopter::DieHelicopter()
 {
     if (state() == CHelicopter::eDead)
         return;
+    PilotEject(); // portal-mod E44: the pilot is thrown out
     CEntity::Die(NULL);
 
     m_engineSound.stop();

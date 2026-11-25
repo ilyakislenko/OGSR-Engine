@@ -912,6 +912,8 @@ void send_event_mouse_wheel(int vol) //Вращение колеса мыши
 {
     Level().IR_OnMouseWheel(vol);
 }
+// portal-mod E44: a mouse move as the player's (a lab scenario flies the helicopter with it)
+void send_event_mouse_move(int dx, int dy) { Level().IR_OnMouseMove(dx, dy); }
 //
 
 // Real Wolf 07.07.2014
@@ -1709,7 +1711,7 @@ void CLevel::script_register(lua_State* L)
             def("get_target_dist", &GetTargetDist), def("get_target_obj", &GetTargetObj), def("get_current_ray_query", &GetCurrentRayQuery),
             //
             def("send_event_key_press", &send_event_key_press), def("send_event_key_release", &send_event_key_release), def("send_event_key_hold", &send_event_key_hold),
-            def("send_event_mouse_wheel", &send_event_mouse_wheel),
+            def("send_event_mouse_wheel", &send_event_mouse_wheel), def("send_event_mouse_move", &send_event_mouse_move), // portal-mod E44
 
             def("iterate_nearest", &iterate_nearest),
 

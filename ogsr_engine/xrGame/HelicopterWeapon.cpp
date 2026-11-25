@@ -101,13 +101,18 @@ void CHelicopter::MGunUpdateFire()
 }
 void CHelicopter::OnShot()
 {
+    if (m_pilot_on && m_pilot_ammo == 0) // portal-mod E50: the belt is empty
+    {
+        MGunFireEnd();
+        return;
+    }
     Fvector fire_pos, fire_dir;
     fire_pos = get_CurrentFirePoint();
     fire_dir = m_fire_dir;
 
     float fire_trail_speed = 15.0f;
     clamp(fire_trail_speed, GetCurrVelocity(), 300.0f);
-    if (m_enemy.bUseFireTrail)
+    if (m_enemy.bUseFireTrail && !m_pilot_on) // portal-mod E44: the pilot's rounds go at his aim
     {
         Fvector enemy_pos = m_enemy.destEnemyPos;
 
@@ -144,6 +149,12 @@ void CHelicopter::OnShot()
     };
 
     FireBullet(fire_pos, fire_dir, fireDispersionBase, m_CurrentAmmo, ID(), ID(), TRUE);
+    if (m_pilot_on)
+    {
+        ++m_pilot_shots; // portal-mod E44
+        if (m_pilot_ammo > 0)
+            --m_pilot_ammo; // portal-mod E50
+    }
 
     if (m_bLightShotEnabled)
         Light_Start();
@@ -157,10 +168,10 @@ void CHelicopter::OnShot()
 
 void CHelicopter::MGunFireStart()
 {
-    if (!m_use_mgun_on_attack)
+    if (!m_use_mgun_on_attack && !m_pilot_on) // portal-mod E44: the pilot's gun works whatever the AI's switch
         return;
 
-    if (FALSE == IsWorking() && m_enemy.bUseFireTrail)
+    if (FALSE == IsWorking() && m_enemy.bUseFireTrail && !m_pilot_on)
     {
         // start calc fire trail
         m_enemy.fStartFireTime = Device.fTimeGlobal;
@@ -263,7 +274,9 @@ void CHelicopter::UpdateMGunDir()
     m_fire_dir.set(0, 0, 1);
     m_fire_bone_xform.transform_dir(m_fire_dir);
 
-    m_fire_dir.sub(m_enemy.destEnemyPos, m_fire_pos).normalize_safe();
+    m_pilot_barrel_dir = m_fire_dir; // portal-mod E44: where the barrel points
+    const Fvector& tgt = m_pilot_on ? m_pilot_aim : m_enemy.destEnemyPos; // portal-mod E44: the pilot aims with the view
+    m_fire_dir.sub(tgt, m_fire_pos).normalize_safe();
 
     m_left_rocket_bone_xform = K->LL_GetTransform(m_left_rocket_bone);
     m_left_rocket_bone_xform.mulA_43(XFORM());
@@ -278,7 +291,7 @@ void CHelicopter::UpdateMGunDir()
     Fmatrix XFi;
     XFi.invert(XFORM());
     Fvector dep;
-    XFi.transform_tiny(dep, m_enemy.destEnemyPos);
+    XFi.transform_tiny(dep, tgt);
     { // x angle
         Fvector A_;
         A_.sub(dep, m_bind_x);
@@ -308,7 +321,7 @@ void CHelicopter::UpdateMGunDir()
 
 void CHelicopter::startRocket(u16 idx)
 {
-    if ((getRocketCount() >= 1) && m_use_rocket_on_attack)
+    if ((getRocketCount() >= 1) && (m_use_rocket_on_attack || m_pilot_on)) // portal-mod E44
     {
         CExplosiveRocket* pGrenade = smart_cast<CExplosiveRocket*>(getCurrentRocket());
         VERIFY(pGrenade);
@@ -319,8 +332,15 @@ void CHelicopter::startRocket(u16 idx)
 
         Fvector vel;
         Fvector dir;
-        dir.sub(m_enemy.destEnemyPos, rocketXFORM.c).normalize_safe();
+        dir.sub(m_pilot_on ? m_pilot_aim : m_enemy.destEnemyPos, rocketXFORM.c).normalize_safe(); // portal-mod E44
         vel.mul(dir, CRocketLauncher::m_fLaunchSpeed);
+        if (m_pilot_on) // portal-mod E44: off a moving helicopter
+        {
+            vel.add(m_pilot_vel);
+            ++m_pilot_rockets;
+            if (m_pilot_rkt > 0)
+                --m_pilot_rkt; // portal-mod E50
+        }
 
         Fmatrix xform;
         xform.identity();

@@ -10,6 +10,7 @@
 #include "hit.h"
 #include "PHDestroyable.h"
 #include "Car.h"
+#include "helicopter.h" // portal-mod E44
 #include "xrserver_objects_alife_monsters.h"
 #include "CameraLook.h"
 #include "CameraFirstEye.h"
@@ -437,6 +438,25 @@ struct playing_pred
 void CActor::Hit(SHit* pHDS)
 {
     pHDS->aim_bullet = false;
+
+    // portal-mod E47: the pilot of a helicopter sits inside its hull - what would strike the actor's hidden body
+    // (standing on the seat, its head up through the canopy) strikes the helicopter
+    if (m_holder && g_Alive())
+        if (CHelicopter* heli = smart_cast<CHelicopter*>(m_holder))
+        {
+            const ALife::EHitType t = pHDS->hit_type;
+            if (t == ALife::eHitTypeFireWound || t == ALife::eHitTypeWound || t == ALife::eHitTypeWound_2 || t == ALife::eHitTypeStrike ||
+                t == ALife::eHitTypeExplosion || t == ALife::eHitTypePhysicStrike)
+            {
+                if (pHDS->who != heli)
+                {
+                    SHit H = *pHDS;
+                    H.boneID = u16(-1);
+                    heli->Hit(&H);
+                }
+                return;
+            }
+        }
 
     SHit HDS = *pHDS;
     if (HDS.hit_type < ALife::eHitTypeBurn || HDS.hit_type >= ALife::eHitTypeMax)
@@ -1124,7 +1144,7 @@ void CActor::shedule_Update(u32 DT)
 
     //если в режиме HUD, то сама модель актера не рисуется
     const bool hud_view = m_holder ? m_holder->HUDView() : cam_active == eacFirstEye;
-    setVisible(!character_physics_support()->IsRemoved() && !hud_view);
+    setVisible(!character_physics_support()->IsRemoved() && (!hud_view || portal_mod::cine) && !(m_holder && smart_cast<CHelicopter*>(m_holder))); // portal-mod E44: not drawn in a helicopter; // portal-mod E21: a scene's camera shows the player
 
     //что актер видит перед собой
     collide::rq_result& RQ = HUD().GetCurrentRayQuery();
@@ -1168,7 +1188,8 @@ void CActor::shedule_Update(u32 DT)
         }
         else if (m_pVehicleWeLookingAt)
         {
-            m_sDefaultObjAction = m_sCarCharacterUseAction;
+            // portal-mod E50: a helicopter has its own tip (the mod's string table)
+            m_sDefaultObjAction = smart_cast<CHelicopter*>(RQ.O) ? "pm_heli_character_use" : m_sCarCharacterUseAction;
         }
         else if (inventory().m_pTarget && inventory().m_pTarget->CanTake())
         {

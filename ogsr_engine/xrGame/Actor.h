@@ -280,6 +280,7 @@ protected:
 
     bool use_Vehicle(CHolderCustom* object);
     bool use_MountedWeapon(CHolderCustom* object);
+    bool use_Helicopter(CHolderCustom* object); // portal-mod E44
     void ActorUse();
 
 private:

@@ -23,6 +23,7 @@
 #include "PhysicsGamePars.h"
 #include "phworld.h"
 #include "string_table.h"
+#include "helicopter.h" // portal-mod E50
 #include "ai_space.h"
 #include "ai/monsters/BaseMonster/base_monster.h"
 #include "date_time.h"
@@ -511,6 +512,14 @@ public:
         if (!g_actor || !Actor()->g_Alive())
         {
             Msg("cannot make saved game because actor is dead :(");
+            return;
+        }
+        if (smart_cast<CHelicopter*>(Actor()->Holder())) // portal-mod E50: no saving at a helicopter's controls
+        {
+            Msg("! cannot make a saved game: the actor flies a helicopter");
+            SDrawStaticStruct* _s = HUD().GetUI()->UIGame()->AddCustomStatic("game_saved", true);
+            _s->m_endTime = Device.fTimeGlobal + 3.0f;
+            _s->wnd()->SetText(*CStringTable().translate("pm_heli_no_save"));
             return;
         }
 

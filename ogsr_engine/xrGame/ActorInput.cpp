@@ -10,6 +10,7 @@
 #include "hit.h"
 #include "PHDestroyable.h"
 #include "Car.h"
+#include "helicopter.h" // portal-mod E44
 #include "HudManager.h"
 #include "UIGameSP.h"
 #include "inventory.h"
@@ -340,6 +341,8 @@ bool CActor::use_Holder(CHolderCustom* holder)
             b = use_Vehicle(0);
         else if (holderGO->CLS_ID == CLSID_OBJECT_W_MOUNTED || holderGO->CLS_ID == CLSID_OBJECT_W_STATMGUN)
             b = use_MountedWeapon(0);
+        else if (smart_cast<CHelicopter*>(holderGO)) // portal-mod E44
+            b = use_Helicopter(0);
 
         if (inventory().ActiveItem())
         {
@@ -356,6 +359,8 @@ bool CActor::use_Holder(CHolderCustom* holder)
         CGameObject* holderGO = smart_cast<CGameObject*>(holder);
         if (smart_cast<CCar*>(holder))
             b = use_Vehicle(holder);
+        if (smart_cast<CHelicopter*>(holder)) // portal-mod E44
+            b = use_Helicopter(holder);
 
         if (holderGO->CLS_ID == CLSID_OBJECT_W_MOUNTED || holderGO->CLS_ID == CLSID_OBJECT_W_STATMGUN)
             b = use_MountedWeapon(holder);

@@ -13,6 +13,7 @@
 #include "patrol_path.h"
 #include "PHDestroyable.h"
 #include "Explosive.h"
+#include "holder_custom.h" // portal-mod E44
 
 class CScriptGameObject;
 class CLAItem;
@@ -154,7 +155,8 @@ class CHelicopter : public CEntity,
                     public CPHSkeleton,
                     public CPHDestroyable,
                     public CHitImmunity,
-                    public CExplosive
+                    public CExplosive,
+                    public CHolderCustom // portal-mod E44: a player flies it
 #ifdef DEBUG
     ,
                     public pureRender
@@ -364,6 +366,120 @@ public:
     float SetHeliHealth(float value) { return inherited::SetfHealth(value); }
 
     virtual float GetHotness() override { return 0.f; }
+
+    // portal-mod E44: a player flies it (F in, F out): WASD forward/back and the roll, jump/crouch up/down, the mouse
+    // turns the view (the heading follows it), fire the nose gun, zoom rockets; while flown the AI's movement is off,
+    // the helicopter moves by its XFORM and rays keep it out of the ground and the walls
+    virtual CHolderCustom* cast_holder_custom() override { return this; }
+    virtual void OnMouseMove(int x, int y) override;
+    virtual void OnKeyboardPress(int dik) override;
+    virtual void OnKeyboardRelease(int dik) override;
+    virtual void OnKeyboardHold(int dik) override;
+    virtual CInventory* GetInventory() override { return nullptr; }
+    virtual void cam_Update(float dt, float fov = 90.0f) override;
+    virtual void UpdateEx(float fov) override;
+    virtual bool Use(const Fvector& pos, const Fvector& dir, const Fvector& foot_pos) override;
+    virtual bool attach_Actor(CGameObject* actor) override;
+    virtual void detach_Actor() override;
+    virtual bool allowWeapon() const override { return false; }
+    virtual bool HUDView() const override { return true; }
+    virtual Fvector ExitPosition() override;
+    virtual Fvector ExitVelocity() override { return m_pilot_vel; }
+    virtual CCameraBase* Camera() override { return m_pilot_cam; }
+    bool portal_piloted() const { return m_pilot_on; }
+    float portal_pilot_gear();
+    void PilotEject();
+    // portal-mod E50: the realistic flight, crashes, ammunition, parked / falling with nobody at the controls
+    int portal_pilot_mode() const { return m_pilot_mode; }
+    void portal_set_pilot_mode(int mode);
+    int portal_pilot_rounds() const { return m_pilot_ammo; }
+    int portal_pilot_rockets() const { return m_pilot_rkt; }
+    void portal_set_pilot_ammo(int rounds, int rockets);
+    bool portal_pilot_on_ground() const { return m_pilot_ground; }
+    float portal_pilot_agl() const { return m_pilot_agl; }
+    float portal_pilot_collective() const { return m_pilot_coll; }
+    float portal_pilot_pitch();
+    float portal_pilot_bank();
+    float portal_pilot_heading() const { return m_body.currBodyHPB.x; }
+    float portal_pilot_stick_pitch();
+    float portal_pilot_stick_bank();
+    Fvector portal_pilot_velocity() const;
+    Fvector portal_pilot_aim() const;
+    float portal_pilot_vel(int i) const { return i == 0 ? m_pilot_vel.x : i == 1 ? m_pilot_vel.y : m_pilot_vel.z; } // by component
+    float portal_pilot_aim_at(int i) const { return i == 0 ? m_pilot_aim.x : i == 1 ? m_pilot_aim.y : m_pilot_aim.z; }
+    int portal_pilot_view() const { return m_pilot_view; }
+    bool portal_pilot_assist() const { return m_pilot_on && pilot_key(ePilotAssist); }
+    float portal_pilot_hull() const;
+    u32 portal_pilot_crash_age() const { return m_pilot_crash_time ? Device.dwTimeGlobal - m_pilot_crash_time : u32(-1); }
+    bool portal_pilot_parked() const { return m_pilot_parked; }
+    void portal_set_pilot_parked(bool on);
+
+private:
+    enum
+    {
+        ePilotFwd = 1 << 0,
+        ePilotBack = 1 << 1,
+        ePilotLeft = 1 << 2,
+        ePilotRight = 1 << 3,
+        ePilotUp = 1 << 4,
+        ePilotDown = 1 << 5,
+        ePilotBoost = 1 << 6,
+        ePilotFire = 1 << 7,
+        ePilotRocket = 1 << 8,
+        ePilotAssist = 1 << 9, // portal-mod E50: R held, hover hold
+    };
+    CCameraBase* m_pilot_cam{};
+    bool m_pilot_on{};
+    u32 m_pilot_keys{};      // pressed (press / release)
+    u32 m_pilot_hold_keys{}; // held (hold events, each good for 150 ms)
+    u32 m_pilot_hold_time[10]{};
+    Fvector m_pilot_vel{};
+    float m_pilot_turn{}; // the heading's rate, rad/s
+    float m_pilot_vfwd_prev{};
+    float m_pilot_afwd{}; // the forward acceleration, smoothed (the nose's pitch)
+    float m_pilot_cam_h{}, m_pilot_cam_p{}; // the view's world heading and pitch (Fvector::setHP)
+    float m_pilot_cam_d{}; // the chase camera's distance now
+    float m_pilot_fov{90.f};
+    u32 m_pilot_cam_frame{};
+    int m_pilot_view{}; // 0 behind, 1 the cockpit
+    Fvector m_pilot_aim{};
+    Fvector m_pilot_barrel_dir{};
+    bool m_pilot_ground{};
+    bool m_pilot_eject{};
+    u32 m_pilot_log_time{};
+    u32 m_pilot_shots{}, m_pilot_rockets{};
+    Fbox m_pilot_box{}; // the fuselage (local), for the rays
+    float m_pilot_rotor_r{};
+    u16 m_pilot_seat_bone{u16(-1)};
+    int m_pilot_mode{1};               // portal-mod E50: 1 the realistic flight, 0 E44's simple one
+    float m_pilot_coll{};              // the collective, 0..1
+    float m_pilot_tp{}, m_pilot_tb{};  // the cyclic: the pitch and the bank it holds the hull at (rad, the engine's)
+    float m_pilot_yaw{};               // the heading's rate (rad/s)
+    float m_pilot_agl{};               // metres from the wheels to the ground under them
+    float m_pilot_chase_h{};           // the camera behind: its heading, easing after the hull's
+    u32 m_pilot_chase_frame{};
+    int m_pilot_ammo{-1}, m_pilot_rkt{-1}; // rounds, rockets (-1: not loaded yet)
+    float m_pilot_hp_full{};           // the health it had when first flown: crash damage is a fraction of it
+    bool m_pilot_ghost{};              // left in the air: it flies on with nobody at the controls (and falls)
+    bool m_pilot_parked{};             // left on the ground: the engine off, the AI does not move it
+    float m_pilot_rotor_cut{};         // this step: the move toward what the rotor's disc met (m)
+    bool m_pilot_rotor_up{};           // this step: something over the hull in the rotor's height stopped a climb
+    u32 m_pilot_crash_time{};
+    Fvector m_pilot_seat_local{};      // the seat in the hull's frame as last read alive (dead, the bones follow the physics)
+    bool pilot_key(u32 bit) const;
+    void pilot_set_key(int cmd, bool on, bool hold);
+    void PilotStep(float dt);
+    void PilotCollide(Fvector& m);
+    void PilotStepReal(float dt);                                  // portal-mod E50
+    void PilotImpacts(const Fvector& m0, const Fvector& m, float dt); // portal-mod E50
+    void PilotDamage(float dmg, LPCSTR why);                        // portal-mod E50
+    float PilotGroundGap();                                         // portal-mod E50
+    void cam_UpdateReal(float dt, float fov);                       // portal-mod E50
+    void PilotWeapons();
+    Fvector PilotSeat();
+
+public:
+    float PilotRay(const Fvector& from, const Fvector& dir, float range);
 
 #ifdef DEBUG
 public:
