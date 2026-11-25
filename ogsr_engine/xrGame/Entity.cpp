@@ -3,6 +3,7 @@
 //////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "hudmanager.h"
 #include "Entity.h"
 #include "actor.h"
@@ -248,6 +249,8 @@ void CEntity::net_Destroy()
 
 void CEntity::KillEntity(u16 whoID)
 {
+    if (portal_mod_reboot::intercept(this, whoID)) // portal-mod E74: the actor with a charge left reboots instead
+        return;
     if (whoID != ID())
     {
 #ifdef DEBUG

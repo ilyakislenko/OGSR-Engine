@@ -10,6 +10,7 @@
 #include "../level.h"
 #include "../object_broker.h"
 #include "../Actor.h"
+#include "../portal_mod_reboot.h" // portal-mod E74
 #include "../saved_game_wrapper.h"
 
 extern string_path g_last_saved_game;
@@ -99,7 +100,7 @@ void CUIMMShniaga::Init(CUIXml& xml_doc, LPCSTR path)
     else
     {
         VERIFY(Actor());
-        if (Actor() && !Actor()->g_Alive())
+        if (Actor() && !Actor()->g_Alive() && !portal_mod_reboot::active()) // portal-mod E74: rebooting is not dead
             CreateList(m_buttons, xml_doc, "menu_main_single_dead");
         else
             CreateList(m_buttons, xml_doc, "menu_main_single");

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "..\xr_3da\XR_IOConsole.h"
 #include "..\xr_3da\xr_ioc_cmd.h"
 #include "../xr_3da/customhud.h"
@@ -510,7 +511,7 @@ public:
     CCC_ALifeSave(LPCSTR N) : IConsole_Command(N) { bEmptyArgsHandled = true; };
     virtual void Execute(LPCSTR args)
     {
-        if (!g_actor || !Actor()->g_Alive())
+        if (!g_actor || (!Actor()->g_Alive() && !portal_mod_reboot::active())) // portal-mod E74: saved mid-reboot
         {
             Msg("cannot make saved game because actor is dead :(");
             return;

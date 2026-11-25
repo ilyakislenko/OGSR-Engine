@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "script_game_object.h"
 #include "UsableScriptObject.h"
 #include "GameObject.h"
@@ -138,7 +139,7 @@ bool CScriptGameObject::Alive() const
         ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "CSciptEntity : cannot access class member Alive!");
         return (false);
     }
-    return (!!entity->g_Alive());
+    return (!!entity->g_Alive() || portal_mod_reboot::script_alive(entity)); // portal-mod E74: rebooting = alive to scripts
 }
 
 ALife::ERelationType CScriptGameObject::GetRelationType(CScriptGameObject* who)

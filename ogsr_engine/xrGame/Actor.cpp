@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "portal_mod.h" // portal-mod E21
 #include "Actor_Flags.h"
 #include "hudmanager.h"
@@ -792,6 +793,7 @@ bool Is3dssZoomed{};
 
 void CActor::UpdateCL()
 {
+    portal_mod_reboot::update(this); // portal-mod E74: a reboot instead of the death
     if (m_holder)
         portal_mod_feature_eject(this); // portal-mod E55: a car or a helicopter switched off in My Mods: out
 
