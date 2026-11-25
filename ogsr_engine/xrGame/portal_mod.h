@@ -174,6 +174,10 @@ inline void contact_point(const float* pos, const float* nrm, const float* body,
 // portal-mod E21: a scene's camera is on (level.cine_cam): the picture is from it, the player's model is drawn
 inline bool cine = false;
 
+// portal-mod E49: the drone flown by hand (level.drone_fpv_hud): the game's own HUD - the main in-game window (minimap,
+// health, the pick-up prompt) and the crosshair with its target info - is not drawn; script windows still are
+inline bool fpv_hud = false;
+
 // portal-mod E10: roll added to the first-person camera (radians), set from Lua (level.portal_view_roll)
 inline float view_roll = 0.f;
 } // namespace portal_mod

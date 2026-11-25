@@ -5,6 +5,10 @@
 #include "../../xr_3da/CustomHUD.h"
 #include "../xrRender/dxEnvironmentRender.h"
 
+// portal-mod E45: defined in xr_3da/Render.cpp (declared here, not in Render.h, so the patch rebuilds only what uses them)
+ENGINE_API extern bool portal_mod_drone_pass; // the second pass is the drone's camera (tonemapped into rt_drone0)
+ENGINE_API extern float portal_mod_pass_zoom; // the second pass's projection scale (1 = the main camera's field of view)
+
 void CRenderTarget::phase_combine(CBackend& cmd_list)
 {
     ZoneScoped;
@@ -143,7 +147,7 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
     }
 
     // portal-mod E2: the view through a portal ends here, HDR, before bloom/tonemap/AA: the portal shader samples it
-    if (portal_mod_pass)
+    if (portal_mod_pass && !portal_mod_drone_pass) // portal-mod E45: the drone's view goes on to bloom and tonemap
     {
         HW.get_context(cmd_list.context_id)->CopyResource(rt_portal0->pSurface, rt_Generic_0->pSurface);
         return;
@@ -151,7 +155,7 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
 
     auto& dsgraph = RImplementation.get_imm_context();
 
-    if (g_hud && g_hud->RenderActiveItemUIQuery())
+    if (!portal_mod_pass && g_hud && g_hud->RenderActiveItemUIQuery()) // portal-mod E45: not in the drone's view
         dsgraph.r_dsgraph_render_hud_ui();
 
     //	Igor: for volumetric lights
@@ -182,13 +186,36 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
     {
         // Perform blooming filter and distortion if needed
         cmd_list.set_Stencil(FALSE);
+        const float bloom_factor = f_bloom_factor; // portal-mod E45: the drone's pass leaves the main view's smoothing alone
         phase_bloom(cmd_list); // HDR RT invalidated here
+        if (portal_mod_pass)
+            f_bloom_factor = bloom_factor;
     }
 
     {
         PIX_EVENT(combine_tonemap);
         RenderScreenTriangle(cmd_list, rt_Generic_combine, s_combine->E[2]);
         HW.get_context(cmd_list.context_id)->CopyResource(rt_Generic_0->pSurface, rt_Generic_combine->pSurface);
+    }
+
+    // portal-mod E45: the drone's camera ends here - its own blur and SSFX bloom and the final grade (combine_2 without
+    // motion blur or lens flares: the main view's flares would show in it), copied into rt_drone0. AA, sunshafts and
+    // motion blur keep the main view's history and are left out.
+    if (portal_mod_pass)
+    {
+        phase_blur(cmd_list);
+        if (ps_r2_ls_flags.test(R2FLAG_SSFX_BLOOM))
+            phase_ssfx_bloom(cmd_list);
+        const BOOL flares = ps_r2_ls_flags_ext.test(R2FLAGEXT_LENS_FLARE);
+        ps_r2_ls_flags_ext.set(R2FLAGEXT_LENS_FLARE, FALSE);
+        RenderScreenTriangle(cmd_list, rt_Generic_combine, s_combine->E[3], [&]() {
+            cmd_list.set_c("m_current", Device.mProject);
+            cmd_list.set_c("m_previous", Device.mProject);
+            cmd_list.set_c("m_blur", 0.f, 0.f, 0.f, 0.f);
+        });
+        ps_r2_ls_flags_ext.set(R2FLAGEXT_LENS_FLARE, flares);
+        HW.get_context(cmd_list.context_id)->CopyResource(rt_drone0->pSurface, rt_Generic_combine->pSurface);
+        return;
     }
 
     const bool need_heatvision = (ps_pnv_mode == 2 || ps_pnv_mode == 3);

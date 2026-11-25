@@ -51,6 +51,7 @@ public:
 
     //  Second viewport
     ref_rt rt_portal0; // portal-mod E2: HDR view through a portal
+    ref_rt rt_drone0; // portal-mod E45: the drone's camera, tonemapped (the HUD's picture in picture)
     ref_rt rt_second_vp; // 32bit		(r,g,b,a) 
 
     ref_rt rt_dof;

@@ -23,6 +23,7 @@
 
 #define r2_RT_generic0 "$user$generic0"
 #define r2_RT_portal0 "$user$portal0" // portal-mod E2
+#define r2_RT_drone0 "$user$drone0" // portal-mod E45
 #define r2_RT_generic0_prev "$user$generic0_previous"
 #define r2_RT_generic_combine "$user$generic_combine"
 #define r2_RT_generic_combine_scope "$user$generic_combine_scope"

@@ -10,6 +10,7 @@
 #include "ui/UIMainIngameWnd.h"
 #include "ui/UIMessagesWindow.h"
 #include "ui/UIPdaWnd.h"
+#include "portal_mod.h" // portal-mod E49
 
 CUI::CUI(CHUDManager* p)
 {
@@ -95,7 +96,8 @@ bool CUI::Render()
     {
         if (GameIndicatorsShown())
         {
-            UIMainIngameWnd->Draw();
+            if (!portal_mod::fpv_hud) // portal-mod E49: the drone's FPV view: no minimap, health, pick-up prompt
+                UIMainIngameWnd->Draw();
             m_pMessagesWnd->Draw();
         }
         // Оставил рендер новостей под этим условием чтобы при скриптовом скрытии ui сообщения продолжали быть видны,

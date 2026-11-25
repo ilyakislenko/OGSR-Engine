@@ -512,7 +512,82 @@ static void portal_mod_render_view()
     if (show_me)
         me->setVisible(TRUE);
     Render->RenderPortalView(pos, dir, top, clip);
+    if (show_me)
+        me->setVisible(FALSE);
     portal_mod_draw[entry].params.w = 1.f;
+}
+
+// portal-mod E45: defined in xr_3da/Render.cpp (declared here, not in Render.h, so the patch rebuilds only what uses them)
+ENGINE_API extern bool portal_mod_drone_pass; // the second pass is the drone's camera (tonemapped into rt_drone0)
+ENGINE_API extern float portal_mod_pass_zoom; // the second pass's projection scale (1 = the main camera's field of view)
+
+// portal-mod E45: the drone's camera - one more pass from a free camera into rt_drone0 (tonemapped) on the frames Lua asks
+// for one (level.drone_view); the HUD's picture in picture shows "$user$drone0"
+static struct
+{
+    bool want{};
+    Fvector pos{}, dir{}, top{};
+    u16 hide{u16(-1)};
+    float fov{};
+} portal_mod_drone;
+
+void portal_mod_drone_request(const Fvector& pos, const Fvector& dir, const Fvector& top, u16 hide, float fov)
+{
+    portal_mod_drone.want = true;
+    portal_mod_drone.pos = pos;
+    portal_mod_drone.dir = dir;
+    portal_mod_drone.top = top;
+    portal_mod_drone.hide = hide;
+    portal_mod_drone.fov = fov;
+}
+
+static void portal_mod_render_drone()
+{
+    if (!portal_mod_drone.want)
+        return;
+    portal_mod_drone.want = false;
+
+    Fvector dir = portal_mod_drone.dir, top = portal_mod_drone.top, right;
+    if (dir.square_magnitude() < EPS)
+        return;
+    dir.normalize();
+    right.crossproduct(top, dir);
+    if (right.square_magnitude() < EPS)
+        right.crossproduct(Fvector().set(0.f, 0.f, 1.f), dir);
+    if (right.square_magnitude() < EPS)
+        return;
+    right.normalize();
+    top.crossproduct(dir, right);
+
+    // the clip plane at the projection's own near distance along the view: E2's oblique near plane = the standard one
+    const Fmatrix& P = Device.mProject;
+    const float near_d = _abs(P._33) > EPS ? -P._43 / P._33 : 0.2f;
+    Fvector on_plane;
+    on_plane.mad(portal_mod_drone.pos, dir, near_d);
+    Fplane clip;
+    clip.build(on_plane, dir);
+
+    CObject* hide = portal_mod_drone.hide != u16(-1) ? Level().Objects.net_Find(portal_mod_drone.hide) : nullptr;
+    CActor* me = smart_cast<CActor*>(Level().CurrentViewEntity());
+    const bool show_me = me && me != hide && !me->getVisible() && me->g_Alive() && !me->Holder(); // as E18 through a portal
+    const bool hid = hide && hide->getVisible();
+    if (show_me)
+        me->setVisible(TRUE);
+    if (hid)
+        hide->setVisible(FALSE);
+
+    portal_mod_pass_zoom = 1.f;
+    if (portal_mod_drone.fov > 1.f && portal_mod_drone.fov < 170.f && Device.fFOV > 1.f)
+        portal_mod_pass_zoom = std::tan(deg2rad(Device.fFOV) * 0.5f) / std::tan(deg2rad(portal_mod_drone.fov) * 0.5f);
+    portal_mod_drone_pass = true;
+    Render->RenderPortalView(portal_mod_drone.pos, dir, top, clip);
+    portal_mod_drone_pass = false;
+    portal_mod_pass_zoom = 1.f;
+
+    if (hid)
+        hide->setVisible(TRUE);
+    if (show_me)
+        me->setVisible(FALSE);
 }
 
 void CLevel::OnRender()
@@ -520,6 +595,7 @@ void CLevel::OnRender()
     inherited::OnRender();
 
     portal_mod_render_view(); // portal-mod E2
+    portal_mod_render_drone(); // portal-mod E45
 
     Render->Calculate();
     Render->Render();

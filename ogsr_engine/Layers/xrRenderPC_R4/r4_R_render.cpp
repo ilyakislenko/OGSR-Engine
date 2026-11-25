@@ -6,6 +6,10 @@
 
 #include "../xrRender/QueryHelper.h"
 
+// portal-mod E45: defined in xr_3da/Render.cpp (declared here, not in Render.h, so the patch rebuilds only what uses them)
+ENGINE_API extern bool portal_mod_drone_pass; // the second pass is the drone's camera (tonemapped into rt_drone0)
+ENGINE_API extern float portal_mod_pass_zoom; // the second pass's projection scale (1 = the main camera's field of view)
+
 #include <..\AMD_FSR2\build\native\include\ffx-fsr2-api\ffx_fsr2.h>
 #include <..\AMD_FSR2\build\native\include\ffx-fsr2-api\dx11\ffx_fsr2_dx11.h>
 
@@ -600,6 +604,9 @@ void CRender::render_forward()
             cmd_list.set_Shader(Target->s_portal_gun);
             cmd_list.set_xform_world(portal.xform);
             // portal-mod E19: through a portal (the pass) the entry one shows last frame's view - Portal 2's tunnel
+            // portal-mod E45: the drone's camera sees them closed (rt_portal0 is the player's view through them)
+            const float see = portal_mod_pass ? (portal_mod_view_prev && !portal_mod_drone_pass ? 1.f : 0.f) : portal.params.w;
+            cmd_list.set_c("portal_params", portal.params.x, portal.params.y, portal.params.z, see);
 
             // portal-mod E10: the second quad behind the surface only when the camera is right at the portal (closer than
             // the near plane can show it); otherwise it would peek over a fence or through the gaps between its boards
@@ -668,6 +675,8 @@ void CRender::RenderPortalView(const Fvector& pos, const Fvector& dir, const Fve
     Device.mInvView.invert(Device.mView);
 
     portal_mod_P_std.set(s_proj);
+    portal_mod_P_std._11 *= portal_mod_pass_zoom; // portal-mod E45: the drone camera's own field of view
+    portal_mod_P_std._22 *= portal_mod_pass_zoom;
     portal_mod_full_std.mul(portal_mod_P_std, Device.mView);
     ViewBase.CreateFromMatrix(portal_mod_full_std, FRUSTUM_P_LRTB + FRUSTUM_P_FAR);
 
@@ -678,7 +687,7 @@ void CRender::RenderPortalView(const Fvector& pos, const Fvector& dir, const Fve
     Device.mView.transform_tiny(p_view, p_world);
     Fvector4 C;
     C.set(n_view.x, n_view.y, n_view.z, -n_view.dotproduct(p_view));
-    portal_mod_P_obl.set(s_proj);
+    portal_mod_P_obl.set(portal_mod_P_std); // portal-mod E45
     portal_mod_make_oblique(portal_mod_P_obl, C);
 
     portal_mod_projection(false);

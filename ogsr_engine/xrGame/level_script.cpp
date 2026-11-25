@@ -160,6 +160,14 @@ static void portal_move_npc(u16 id, Fvector pos, Fvector vel)
         m->destroy_anim_mov_ctrl();
 }
 
+// portal-mod E45: one picture from the drone's camera on the next render (Level.cpp -> "$user$drone0"); hide = an object
+// not drawn in it (65535: none), fov = vertical degrees (0: the main camera's)
+extern void portal_mod_drone_request(const Fvector& pos, const Fvector& dir, const Fvector& top, u16 hide, float fov);
+static void drone_view(Fvector pos, Fvector dir, Fvector top, int hide, float fov)
+{
+    portal_mod_drone_request(pos, dir, top, hide < 0 || hide > 65535 ? u16(-1) : u16(hide), fov);
+}
+
 // portal-mod E41: a physics object (a scene's prop) held at pos, its +z along dir and +y toward up: the shell's bodies
 // put there with the interpolation restarted, the velocities zeroed; collide false lets the actor through it
 static void portal_pose_object(u16 id, Fvector pos, Fvector dir, Fvector up, bool collide)
@@ -769,6 +777,56 @@ void remove_cam_effector(int id) { Actor()->Cameras().RemoveCamEffector((ECamEff
 // puts it at the front of the list, processed last); it drops out by itself once level.cine_cam_off() is called
 static Fvector pm_cine_p{}, pm_cine_d{0.f, 0.f, 1.f};
 static float pm_cine_fov{};
+static Fvector pm_cine_n{}; // portal-mod E48: the camera's up (zero: level, the world's up)
+constexpr int PM_CINE_EFFECTOR = 8642;
+class CPortalCineCam : public CEffectorCam
+{
+public:
+    CPortalCineCam() : CEffectorCam((ECamEffectorType)PM_CINE_EFFECTOR, 1.e9f) { SetHudAffect(false); }
+    BOOL ProcessCam(SCamEffectorInfo& info) override
+    {
+        if (!portal_mod::cine)
+            return FALSE;
+        info.p = pm_cine_p;
+        info.d = pm_cine_d;
+        info.n.set(0.f, 1.f, 0.f);
+        if (_abs(pm_cine_d.y) > 0.99f)
+            info.n.set(0.f, 0.f, 1.f);
+        if (pm_cine_n.square_magnitude() > EPS) // portal-mod E48: a rolled camera (the drone flown upside down)
+        {
+            Fvector n = pm_cine_n;
+            n.mad(pm_cine_d, -n.dotproduct(pm_cine_d));
+            if (n.square_magnitude() > EPS)
+                info.n.set(n.normalize());
+        }
+        if (pm_cine_fov > 0.f)
+            info.fFov = pm_cine_fov;
+        return TRUE;
+    }
+    bool AbsolutePositioning() override { return true; }
+};
+static void cine_cam(Fvector p, Fvector d, float fov)
+{
+    pm_cine_p = p;
+    pm_cine_d = d;
+    pm_cine_d.normalize_safe();
+    pm_cine_fov = fov;
+    portal_mod::cine = true;
+    pm_cine_n.set(0.f, 0.f, 0.f); // portal-mod E48: level unless cine_cam_up gives the up
+    if (Actor() && !Actor()->Cameras().GetCamEffector((ECamEffectorType)PM_CINE_EFFECTOR))
+        Actor()->Cameras().AddCamEffector(xr_new<CPortalCineCam>()); // deferred: added twice, the second replaces the first
+}
+// portal-mod E48: the scene camera with its up vector (its roll)
+static void cine_cam_up(Fvector p, Fvector d, Fvector n, float fov)
+{
+    cine_cam(p, d, fov);
+    pm_cine_n = n;
+}
+// portal-mod E49: the game's own HUD off over the drone's FPV view (its script windows stay)
+static void drone_fpv_hud(bool on) { portal_mod::fpv_hud = on; }
+static void cine_cam_off() { portal_mod::cine = false; }
+static bool cine_cam_on() { return portal_mod::cine; }
+
 float get_snd_volume() { return psSoundVFactor; }
 
 void set_snd_volume(float v)
@@ -1698,9 +1756,12 @@ void CLevel::script_register(lua_State* L)
             def("hud_dual", &hud_dual), def("hud_dual_on", &hud_dual_on), // portal-mod E26
             def("hud_dual_alt", &hud_dual_alt), def("hud_dual_swapped", &hud_dual_swapped), // portal-mod E27
             def("cine_cam", &cine_cam), def("cine_cam_off", &cine_cam_off), def("cine_cam_on", &cine_cam_on), // portal-mod E21
+            def("cine_cam_up", &cine_cam_up), // portal-mod E48
+            def("drone_fpv_hud", &drone_fpv_hud), // portal-mod E49
             def("actor_arm_aim", &actor_arm_aim), // portal-mod E34
             def("actor_tp_dual", &actor_tp_dual), // portal-mod E36
             def("portal_pose_object", &portal_pose_object), // portal-mod E41
+            def("drone_view", &drone_view), // portal-mod E45
             def("actor_tp_grip", &actor_tp_grip), def("actor_tp_grip_hands", &actor_tp_grip_hands), // portal-mod E43
             def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_actor_input", &bot_actor_input), def("bot_actor_state", &bot_actor_state), /* stalker-bot B12 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
             def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_tasks", &bot_tasks), // stalker-bot B2

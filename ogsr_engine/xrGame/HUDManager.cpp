@@ -331,7 +331,7 @@ void CHUDManager::RenderUI()
     {
         HitMarker.Render();
 
-        if (psHUD_Flags.is(HUD_CROSSHAIR | HUD_CROSSHAIR_RT | HUD_CROSSHAIR_RT2))
+        if (psHUD_Flags.is(HUD_CROSSHAIR | HUD_CROSSHAIR_RT | HUD_CROSSHAIR_RT2) && !portal_mod::fpv_hud) // portal-mod E49
             m_pHUDTarget->Render();
     }
 
