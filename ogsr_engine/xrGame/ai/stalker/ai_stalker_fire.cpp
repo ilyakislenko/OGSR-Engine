@@ -52,6 +52,7 @@
 #include "../../inventory.h"
 #include "../../game_object_space.h"
 #include "../../holder_custom.h"
+#include "../../portal_mod_wounds.h" // portal-mod E71: NPC wounds by body part
 
 using namespace StalkerSpace;
 
@@ -299,7 +300,16 @@ void CAI_Stalker::Hit(SHit* pHDS)
         }
     }
 
+    const float pm_health0 = conditions().GetHealth(); // portal-mod E71
     inherited::Hit(&HDS);
+    // portal-mod E71: NPC wounds by body part (portal_mod_wounds.cpp); a new limp, fall or arm hit plays the game's own
+    // critical-hit animation for that part when it can (standing, in combat, a weapon in hand)
+    const int pm_wound = portal_mod_wounds::on_hit(this, HDS, pm_health0);
+    if (pm_wound >= 0 && g_Alive() && !critically_wounded() && critical_wound_external_conditions_suitable())
+    {
+        m_critical_wound_type = u32(pm_wound);
+        critical_wounded_state_start();
+    }
 }
 
 void CAI_Stalker::HitSignal(float amount, Fvector& vLocalDir, CObject* who, s16 element)

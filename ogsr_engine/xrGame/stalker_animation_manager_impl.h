@@ -9,8 +9,14 @@
 #pragma once
 
 #include "CharacterPhysicsSupport.h"
+#include "portal_mod_wounds.h" // portal-mod E71: the limp (dmg_norm_)
 
-IC CStalkerAnimationManager::EBodyState CStalkerAnimationManager::body_state() const { return (object().movement().body_state()); }
+// portal-mod E71: a limping stalker standing walks, runs and stands on SoC's own dmg_norm_ set (state 2)
+IC CStalkerAnimationManager::EBodyState CStalkerAnimationManager::body_state() const
+{
+    const EBodyState state = object().movement().body_state();
+    return ((state == MonsterSpace::eBodyStateStand && portal_mod_wounds::limping(&object())) ? EBodyState(2) : state);
+}
 
 IC bool CStalkerAnimationManager::standing() const
 {

@@ -10,6 +10,7 @@
 #include "stalker_animation_data_storage.h"
 #include "stalker_animation_data.h"
 #include "object_broker.h"
+#include "portal_mod_wounds.h" // portal-mod E71
 #include "..\Include/xrRender/KinematicsAnimated.h"
 
 CStalkerAnimationDataStorage* g_stalker_animation_data_storage = 0;
@@ -57,5 +58,6 @@ const CStalkerAnimationData* CStalkerAnimationDataStorage::object(IKinematicsAni
         return ((*I).second);
 
     m_objects.push_back(std::make_pair(skeleton_animated, xr_new<CStalkerAnimationData>(skeleton_animated)));
+    portal_mod_wounds::fill_dmg(m_objects.back().second); // portal-mod E71: the limp's sets the OMF lacks
     return (m_objects.back().second);
 }

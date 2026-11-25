@@ -51,6 +51,10 @@ MotionID CStalkerAnimationManager::global_critical_hit()
 
 MotionID CStalkerAnimationManager::assign_global_animation()
 {
+    // portal-mod E71: the crawl of a stalker down with a hurt leg (walk_fwd_crawl_0 over the whole body)
+    if (const MotionID pm_crawl = portal_mod_wounds::global_anim(&object(), !fis_zero(object().movement().speed(object().character_physics_support()->movement()))))
+        return (pm_crawl);
+
     if (eMentalStatePanic != object().movement().mental_state())
         return (global_critical_hit());
 

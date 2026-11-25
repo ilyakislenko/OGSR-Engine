@@ -21,6 +21,7 @@
 #include "ai_object_location.h"
 #include "stalker_velocity_holder.h"
 #include "stalker_velocity_collection.h"
+#include "portal_mod_wounds.h" // portal-mod E71: a limp's and a crawl's speed
 
 #ifdef DEBUG
 #include "stalker_decision_space.h"
@@ -417,7 +418,7 @@ void CStalkerMovementManager::parse_velocity_mask()
         }
     }
 
-    object().m_fCurSpeed = current_velocity.linear_velocity;
+    object().m_fCurSpeed = portal_mod_wounds::speed(&object(), current_velocity.linear_velocity); // portal-mod E71
     m_body.speed = current_velocity.real_angular_velocity;
     set_desirable_speed(object().m_fCurSpeed);
 
@@ -553,7 +554,7 @@ float CStalkerMovementManager::speed(const EMovementDirection& movement_directio
 {
     VERIFY(movement_type() != eMovementTypeStand);
 
-    return (m_velocities->velocity(mental_state(), body_state(), movement_type(), movement_direction));
+    return (portal_mod_wounds::speed(&object(), m_velocities->velocity(mental_state(), body_state(), movement_type(), movement_direction))); // portal-mod E71
 }
 
 void CStalkerMovementManager::setup_speed_from_animation(const float& speed) { set_desirable_speed(object().m_fCurSpeed = speed); }
