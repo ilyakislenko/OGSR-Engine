@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <queue>
 #include "portal_mod_destruct.h"
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "ParticlesObject.h"
@@ -1663,13 +1664,14 @@ void update_islands()
             if (p.state == ST_FALLING && p.island == (int)slot && p.pv)
                 p.pv->place(piece_xform(p));
         }
-        crush((int)slot); // E54e
+        if (portal_mod_feat::enabled(portal_mod_feat::destruct)) // portal-mod E55: switched off - what still falls lands, crushing no one, breaking on nothing
+            crush((int)slot); // E54e
         Fvector v;
         I->shell->get_LinearVel(v);
         const float dv = I->has_prev ? Fvector().sub(v, I->v_prev).magnitude() : 0.f;
         I->v_prev = v;
         I->has_prev = true;
-        if (dv > ((int)I->pieces.size() > C.big_body ? C.imp_dv * 0.5f : C.imp_dv) && I->touched_static) // E54e: a big body half
+        if (portal_mod_feat::enabled(portal_mod_feat::destruct) && dv > ((int)I->pieces.size() > C.big_body ? C.imp_dv * 0.5f : C.imp_dv) && I->touched_static) // E54e: a big body half; portal-mod E55: switched off, no break-up
         {
             impact((int)slot, dv);
             continue; // the island was split (a new one, maybe in this slot)
@@ -2334,7 +2336,7 @@ float ammo_damage(LPCSTR ammo)
 
 void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& normal, u16 target_material)
 {
-    if (!C.enabled || b.pm_destruct <= 0.f)
+    if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || b.pm_destruct <= 0.f) // portal-mod E55: My Mods
         return;
     const float sp = b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f;
     const float dmg = b.pm_destruct * sp;
@@ -2351,7 +2353,7 @@ bool hole_pass(const Fvector& p) { return !S.holes.empty() && hole_contains(p, 0
 
 void explosion(const Fvector& pos, float radius, float hit, float impulse)
 {
-    if (!S.loaded || !C.enabled || radius <= 0.f)
+    if (!S.loaded || !C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
         return;
     const float R = radius;
     const float D0 = hit * C.k_expl;
@@ -2424,7 +2426,7 @@ static void update_body()
     if (S.loaded)
     {
         update_islands();
-        if (S.dirty)
+        if (S.dirty && portal_mod_feat::enabled(portal_mod_feat::destruct)) // portal-mod E55: switched off - the solver stands, nothing more gives way
             solve();
     }
     update_chips(dt);
@@ -2670,7 +2672,7 @@ Fvector lua_piece_pos(int id)
 
 int lua_piece_state(int id) { return id < 0 || id >= (int)S.pieces.size() ? -1 : S.pieces[id].state; }
 
-void lua_chips(const Fvector& pos, const Fvector& normal, float damage) { chips_at(pos, normal, Fvector().invert(normal), damage, 0); }
+void lua_chips(const Fvector& pos, const Fvector& normal, float damage) { if (portal_mod_feat::enabled(portal_mod_feat::destruct)) /* portal-mod E55 */ chips_at(pos, normal, Fvector().invert(normal), damage, 0); }
 
 // what a bullet from `from` along `dir` meets first on the level: x - its distance (-1: nothing within range), y - the
 // wall's thickness there as a hole would measure it (-1: thicker, or bullets fly through its material), z - its chip
@@ -2718,7 +2720,7 @@ void lua_crush_immune(int id, bool on)
 // (within `radius` m of pos across, 0: the whole building) turns to rubble at once; what stood on them comes down
 int lua_demolish(const Fvector& pos, float radius, float y_lo, float y_hi)
 {
-    if (!S.loaded || !C.enabled)
+    if (!S.loaded || !C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct)) // portal-mod E55
         return 0;
     const float a = S.base_y + y_lo, b = S.base_y + y_hi;
     xr_vector<u16> pcs;

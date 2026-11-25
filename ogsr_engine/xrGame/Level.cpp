@@ -35,6 +35,7 @@
 #include "portal_mod.h" // portal-mod E4
 #include "portal_mod_replay.h" // portal-mod E53
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "PHShell.h"
 #include "PHObject.h"
 #include "Geometry.h"
@@ -107,6 +108,7 @@ CLevel::CLevel()
     eEntitySpawn = Engine.Event.Handler_Attach("LEVEL:spawn", this);
 
     m_pBulletManager = xr_new<CBulletManager>();
+    portal_mod_feat::load(); // portal-mod E55: My Mods' switches as the window saved them
 
     m_map_manager = xr_new<CMapManager>();
 

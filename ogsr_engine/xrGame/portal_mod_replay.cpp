@@ -21,6 +21,7 @@
 #include <mutex>
 #include <atomic>
 #include "portal_mod_replay.h"
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "portal_mod.h"
 #include "Level.h"
 #include "Actor.h"
@@ -3396,6 +3397,17 @@ namespace pm_replay
 {
 void on_frame()
 {
+    if (!portal_mod_feat::enabled(portal_mod_feat::replay)) // portal-mod E55: switched off in My Mods
+    {
+        if (P.open)
+            player_close();
+        if (R.manual)
+            record_stop(); // what was recorded is kept as a take
+        if (!R.ring.samples.empty())
+            R.clear();
+        g_bul_on = false;
+        return;
+    }
     if (P.open)
         player_frame();
     else
@@ -3424,6 +3436,8 @@ bool key_press(int dik)
     if (!P.open)
     {
         if (dik != DIK_INSERT && dik != DIK_HOME && dik != DIK_END)
+            return false;
+        if (!portal_mod_feat::enabled(portal_mod_feat::replay)) // portal-mod E55
             return false;
         if (!g_pGameLevel || (HUD().GetUI() && HUD().GetUI()->MainInputReceiver()))
             return false;

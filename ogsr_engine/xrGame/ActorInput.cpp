@@ -11,6 +11,7 @@
 #include "PHDestroyable.h"
 #include "Car.h"
 #include "helicopter.h" // portal-mod E44
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "HudManager.h"
 #include "UIGameSP.h"
 #include "inventory.h"
@@ -357,6 +358,8 @@ bool CActor::use_Holder(CHolderCustom* holder)
     {
         bool b = false;
         CGameObject* holderGO = smart_cast<CGameObject*>(holder);
+        if (!portal_mod_holder_on(smart_cast<CGameObject*>(holder))) // portal-mod E55: switched off in My Mods
+            return false;
         if (smart_cast<CCar*>(holder))
             b = use_Vehicle(holder);
         if (smart_cast<CHelicopter*>(holder)) // portal-mod E44

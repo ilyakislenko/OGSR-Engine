@@ -11,6 +11,7 @@
 #include "PHDestroyable.h"
 #include "Car.h"
 #include "helicopter.h" // portal-mod E44
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "xrserver_objects_alife_monsters.h"
 #include "CameraLook.h"
 #include "CameraFirstEye.h"
@@ -791,6 +792,9 @@ bool Is3dssZoomed{};
 
 void CActor::UpdateCL()
 {
+    if (m_holder)
+        portal_mod_feature_eject(this); // portal-mod E55: a car or a helicopter switched off in My Mods: out
+
     if (m_feel_touch_characters > 0)
     {
         for (xr_vector<CObject*>::iterator it = feel_touch.begin(); it != feel_touch.end(); it++)
@@ -1178,7 +1182,7 @@ void CActor::shedule_Update(u32 DT)
         m_pInvBoxWeLookingAt = smart_cast<IInventoryBox*>(RQ.O);
         inventory().m_pTarget = smart_cast<PIItem>(RQ.O);
         m_pPersonWeLookingAt = smart_cast<CInventoryOwner*>(RQ.O);
-        m_pVehicleWeLookingAt = smart_cast<CHolderCustom*>(RQ.O);
+        m_pVehicleWeLookingAt = portal_mod_holder_on(RQ.O) ? smart_cast<CHolderCustom*>(RQ.O) : nullptr; // portal-mod E55: not one switched off
         auto pEntityAlive = smart_cast<CEntityAlive*>(RQ.O);
         auto ph_shell_holder = smart_cast<CPhysicsShellHolder*>(RQ.O);
 

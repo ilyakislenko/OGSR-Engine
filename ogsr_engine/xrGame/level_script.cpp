@@ -31,6 +31,9 @@
 #include "portal_mod.h" // portal-mod E10
 #include "portal_mod_replay.h" // portal-mod E53
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_features.h" // portal-mod E55: My Mods' switches
+#include "Car.h"
+#include "helicopter.h"
 #include "phworld.h"
 #include "../xrcdb/xr_collide_defs.h"
 #include "script_rq_result.h"
@@ -1623,6 +1626,134 @@ static bool bot_take_from_box(u16 box_id, u16 item_id)
 
 // stalker-bot B1 end --------------------------------------------------------------------------------------------
 
+// portal-mod E55: My Mods' switches for the engine's side of a feature (portal_mod_features.h)
+namespace portal_mod_feat
+{
+static const char* const NAME[count] = {"heli", "vehicles", "replay", "destruct"};
+static int index(LPCSTR name)
+{
+    for (int i = 0; i < count; ++i)
+        if (name && !xr_strcmp(name, NAME[i]))
+            return i;
+    return -1;
+}
+
+// $app_data_root$\mod_manager.ltx: "name = 1" lines (0 off); written by the window with Lua's io, so read from the disk
+// (the file system's index may not know it yet). No file: as they are (on).
+void load()
+{
+    string_path fn;
+    FS.update_path(fn, "$app_data_root$", "mod_manager.ltx");
+    FILE* f = nullptr;
+    if (fopen_s(&f, fn, "r") || !f)
+        return;
+    char line[256];
+    while (fgets(line, sizeof(line), f))
+    {
+        char* eq = strchr(line, '=');
+        if (!eq || line[0] == ';' || line[0] == '[')
+            continue;
+        *eq = 0;
+        const int i = index(_Trim(line));
+        if (i < 0)
+            continue;
+        LPSTR v = _Trim(eq + 1);
+        on[i] = !xr_strcmp(v, "1") || !_stricmp(v, "on") || !_stricmp(v, "true");
+    }
+    fclose(f);
+    Msg("* E55 My Mods: heli %d, vehicles %d, replay %d, destruct %d", int(on[heli]), int(on[vehicles]), int(on[replay]), int(on[destruct]));
+}
+} // namespace portal_mod_feat
+
+// the actor's protected use_Holder / use_Helicopter for the switches and the lab (a pointer to member taken through a
+// derived class; nothing of this type is ever made)
+struct pm_actor_access : public CActor
+{
+    static bool use(CActor* a, CHolderCustom* h) { return (a->*(&pm_actor_access::use_Holder))(h); }
+    static bool heli_out(CActor* a) { return (a->*(&pm_actor_access::use_Helicopter))(nullptr); }
+};
+
+bool portal_mod_holder_on(CObject* o)
+{
+    if (smart_cast<CHelicopter*>(o))
+        return portal_mod_feat::enabled(portal_mod_feat::heli);
+    if (smart_cast<CCar*>(o))
+        return portal_mod_feat::enabled(portal_mod_feat::vehicles);
+    return true;
+}
+
+void portal_mod_feature_eject(CActor* a)
+{
+    CHolderCustom* h = a ? a->Holder() : nullptr;
+    if (!h)
+        return;
+    CGameObject* go = smart_cast<CGameObject*>(h);
+    if (CHelicopter* heli = smart_cast<CHelicopter*>(go))
+    {
+        if (portal_mod_feat::enabled(portal_mod_feat::heli))
+            return;
+        pm_actor_access::heli_out(a); // out beside the cockpit with the hull's velocity (E44)
+        // up in the air: down onto the ground 12 m off the hull on the cockpit's side, at rest
+        const Fvector c = heli->Position(), p = a->Position();
+        Fvector side{p.x - c.x, 0.f, p.z - c.z};
+        if (side.magnitude() < 0.1f)
+            side.set(1.f, 0.f, 0.f);
+        side.normalize();
+        const Fvector q{c.x + side.x * 12.f, _max(p.y, c.y) + 1.f, c.z + side.z * 12.f};
+        collide::rq_result R;
+        if (Level().ObjectSpace.RayPick(q, Fvector{0.f, -1.f, 0.f}, 1000.f, collide::rqtStatic, R, a))
+        {
+            const Fvector g{q.x, q.y - R.range + 0.05f, q.z};
+            if (p.y - g.y > 2.5f)
+            {
+                a->XFORM().c.set(g);
+                a->character_physics_support()->movement()->SetPosition(g);
+                a->character_physics_support()->movement()->SetVelocity(Fvector{});
+            }
+        }
+        Msg("* E55 helicopters switched off: the player put out of %s at (%.1f, %.1f, %.1f)", go->cName().c_str(), a->Position().x,
+            a->Position().y, a->Position().z);
+    }
+    else if (smart_cast<CCar*>(go))
+    {
+        if (portal_mod_feat::enabled(portal_mod_feat::vehicles))
+            return;
+        a->detach_Vehicle(); // (no room to get out: tried again next frame)
+        if (!a->Holder())
+            Msg("* E55 vehicles switched off: the player out of %s", go->cName().c_str());
+    }
+}
+
+static void pm_feature_set(LPCSTR name, bool on)
+{
+    const int i = portal_mod_feat::index(name);
+    if (i < 0)
+        return;
+    if (portal_mod_feat::on[i] != on)
+        Msg("* E55 %s %s", name, on ? "on" : "off");
+    portal_mod_feat::on[i] = on;
+    if (!on && g_pGameLevel && Actor())
+        portal_mod_feature_eject(Actor());
+}
+
+static bool pm_feature(LPCSTR name)
+{
+    const int i = portal_mod_feat::index(name);
+    return i < 0 || portal_mod_feat::on[i];
+}
+
+// the lab: F on this car or helicopter (in; seated in any: out)
+static bool pm_use_holder(u16 id)
+{
+    CActor* a = Actor();
+    if (!a)
+        return false;
+    if (a->Holder())
+        return pm_actor_access::use(a, nullptr);
+    CHolderCustom* h = smart_cast<CHolderCustom*>(Level().Objects.net_Find(id));
+    return h && pm_actor_access::use(a, h);
+}
+
 void CLevel::script_register(lua_State* L)
 {
     module(L)[class_<CEnvDescriptor>("CEnvDescriptor")
@@ -1776,6 +1907,7 @@ void CLevel::script_register(lua_State* L)
             def("destruct_chips", &portal_mod_destruct::lua_chips),
             def("destruct_hole_at", &portal_mod_destruct::lua_hole_at), // portal-mod E54b
             def("destruct_wall_probe", &portal_mod_destruct::lua_wall_probe), // portal-mod E54b
+            def("pm_feature_set", &pm_feature_set), def("pm_feature", &pm_feature), def("pm_use_holder", &pm_use_holder), // portal-mod E55
             // portal-mod E53: the replay for filming (portal_mod_replay.cpp)
             def("replay_record", &pm_replay::lua_record), def("replay_recording", &pm_replay::lua_recording), def("replay_ring", &pm_replay::lua_ring),
             def("replay_save_ring", &pm_replay::lua_save_ring), def("replay_open", &pm_replay::lua_open_take), def("replay_close", &pm_replay::lua_close),
