@@ -31,6 +31,7 @@
 #include "car_memory.h"
 #include "script_callback_ex.h"
 #include "script_game_object.h"
+#include "portal_mod_ram.h" // portal-mod E72: vehicles break what they ram
 
 BONE_P_MAP CCar::bone_map = BONE_P_MAP();
 
@@ -453,6 +454,7 @@ void CCar::UpdateEx(float fov)
 
     //	Log("UpdateCL",Device.dwFrame);
     // XFORM().set(m_pPhysicsShell->mXFORM);
+    portal_mod_ram::car_update(this); // portal-mod E72 (driven: the actor's camera update)
     VisualUpdate(fov);
     if (OwnerActor() && OwnerActor()->IsMyCamera())
     {
@@ -475,6 +477,7 @@ void CCar::UpdateCL()
             m_memory->set_camera(m_car_weapon->ViewCameraPos(), m_car_weapon->ViewCameraDir(), m_car_weapon->ViewCameraNorm());
     }
     ASCUpdate();
+    portal_mod_ram::car_update(this); // portal-mod E72: what it is about to ram (once a frame)
     if (Owner())
         return;
     //	UpdateEx			(g_fov);
