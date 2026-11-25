@@ -7,6 +7,8 @@
 #pragma once
 
 struct SBullet;
+class IKinematics; // portal-mod E76
+class IRenderable; // portal-mod E76
 
 namespace pm_replay
 {
@@ -57,6 +59,18 @@ LPCSTR lua_save_ring(LPCSTR name);
 bool lua_open_take(LPCSTR name);
 void lua_close();
 bool lua_active();
+// portal-mod E76: the open replay's creatures for the machine vision: id, bones, the puppet, its matrix, its key's
+// pad (0x8000 recorded, 0x4000 alive, the low bits health x 100), its model
+struct VisionPuppet
+{
+    u16 id;
+    IKinematics* K;
+    IRenderable* R;
+    Fmatrix xform;
+    u16 pad;
+    shared_str visual;
+};
+void vision_puppets(xr_vector<VisionPuppet>& out);
 float lua_time();
 float lua_length();
 void lua_seek(float t);

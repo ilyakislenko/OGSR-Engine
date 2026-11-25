@@ -72,6 +72,7 @@
 
 #include "embedded_editor/embedded_editor_main.h"
 #include "..\xr_3da\xr_ioc_cmd.h"
+#include "portal_mod_vision.h" // portal-mod E76
 
 CPHWorld* ph_world = 0;
 
@@ -610,6 +611,7 @@ void CLevel::OnRender()
     portal_mod_render_view(); // portal-mod E2
     portal_mod_render_drone(); // portal-mod E45
 
+    pm_vision::before_render(); // portal-mod E76: the machine vision's frame (the camera is final here)
     Render->Calculate();
     Render->Render();
 

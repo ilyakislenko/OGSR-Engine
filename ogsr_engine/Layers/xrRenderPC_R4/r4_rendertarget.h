@@ -213,6 +213,8 @@ private:
 public:
     CRenderTarget();
     ~CRenderTarget();
+    void phase_pm_vision(CBackend& cmd_list); // portal-mod E76: the machine vision (portal_mod_vision_r4.cpp)
+    void pm_vision_free(); // portal-mod E76
 
     void reset_target_dimensions();
 

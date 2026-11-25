@@ -517,6 +517,7 @@ CRenderTarget::CRenderTarget()
 
 CRenderTarget::~CRenderTarget()
 {
+    pm_vision_free(); // portal-mod E76
     t_LUM_src->surface_set(nullptr);
     t_LUM_dest->surface_set(nullptr);
 

@@ -321,6 +321,8 @@ void CRenderTarget::phase_combine(CBackend& cmd_list)
         g_pGamePersistent->Environment().RenderFlares(cmd_list); // lens-flares
     }
 
+    phase_pm_vision(cmd_list); // portal-mod E76: the machine vision (grade, heat, HUD) before the frame goes out
+
     //	PP-if required
     {
         PIX_EVENT(phase_pp);

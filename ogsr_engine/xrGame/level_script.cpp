@@ -1756,8 +1756,10 @@ static bool pm_use_holder(u16 id)
     return h && pm_actor_access::use(a, h);
 }
 
+void pm_vision_script_register(lua_State* L); // portal-mod E76: level.vision_* (portal_mod_vision.cpp)
 void CLevel::script_register(lua_State* L)
 {
+    pm_vision_script_register(L); // portal-mod E76
     module(L)[class_<CEnvDescriptor>("CEnvDescriptor")
                   .def_readwrite("fog_density", &CEnvDescriptor::fog_density)
                   .def_readwrite("fog_distance", &CEnvDescriptor::fog_distance)

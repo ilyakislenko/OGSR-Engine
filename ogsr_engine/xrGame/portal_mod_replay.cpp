@@ -522,6 +522,8 @@ bool same_obj(const ObjKey& a, const ObjKey& b)
 {
     if (a.flags != b.flags || a.vis[0] != b.vis[0] || a.vis[1] != b.vis[1])
         return false;
+    if (a.pad != b.pad) // portal-mod E76: a creature's alive flag and health
+        return false;
     if (!(a.flags & F_VISIBLE))
         return true;
     if (a.pos.distance_to_sqr(b.pos) > 1e-7f)
@@ -651,6 +653,9 @@ void sample_object(CObject* O, u8 kind, u16 parent, double t)
     k.t = t;
     k.flags = F_VISIBLE;
     k.pos = O->XFORM().c;
+    if (kind == K_CREATURE) // portal-mod E76: alive and health, for the machine vision's heat and data in a replay
+        if (CEntityAlive* ea = smart_cast<CEntityAlive*>(O))
+            k.pad = u16(0x8000 | (ea->g_Alive() ? 0x4000 : 0) | u16(iFloor(clampr(ea->GetfHealth(), 0.f, 1.f) * 100.f + 0.5f)));
     quat_of(O->XFORM(), k.q, &k.scale);
     if (K)
     {
@@ -1525,6 +1530,15 @@ public:
     bool in_space{};
     bool has_mask{};
     VisMask mask;
+    // portal-mod E76: the machine vision's heat - a creature warm while it lives (its alive flag in the key's pad since
+    // E76; an older take has none: warm), the dead cooling, the robot itself barely warm, the rest cold
+    u16 pm_pad{};
+    float GetHotness() override
+    {
+        if (tr->kind == K_CREATURE)
+            return !(pm_pad & 0x8000) || (pm_pad & 0x4000) ? 1.f : 0.3f;
+        return tr->kind == K_ACTOR ? 0.15f : 0.f;
+    }
 
     explicit Puppet(const ObjTrack* t) : ISpatial(g_SpatialSpace), tr(t)
     {
@@ -1876,6 +1890,7 @@ void puppets_update(double t)
         if (!pp)
             pp = xr_new<Puppet>(&tr);
         pp->renderable.xform = xf;
+        pp->pm_pad = tr.keys[key_at(tr.keys, t)].pad; // portal-mod E76
         if (pp->K)
         {
             obj_eval(tr, t, nullptr, nullptr, pp->pose.data(), nullptr, nullptr);
@@ -3776,6 +3791,22 @@ LPCSTR lua_save_ring(LPCSTR name)
 bool lua_open_take(LPCSTR name) { return open_named(name); }
 void lua_close() { player_close(); }
 bool lua_active() { return P.open; }
+
+// portal-mod E76: the creatures of the open replay for the machine vision
+void vision_puppets(xr_vector<VisionPuppet>& out)
+{
+    out.clear();
+    if (!P.open)
+        return;
+    for (u32 i = 0; i < P.take.objs.size() && i < P.puppets.size(); ++i)
+    {
+        const ObjTrack& tr = P.take.objs[i];
+        Puppet* pp = P.puppets[i];
+        if (!pp || !pp->in_space || !pp->K || tr.kind != K_CREATURE)
+            continue;
+        out.push_back({tr.id, pp->K, pp, pp->renderable.xform, pp->pm_pad, tr.visual});
+    }
+}
 float lua_time() { return float(P.t); }
 float lua_length() { return float(P.take.t1); }
 void lua_seek(float t)

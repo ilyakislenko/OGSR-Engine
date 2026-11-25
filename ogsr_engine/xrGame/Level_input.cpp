@@ -38,6 +38,7 @@ extern void restore_actor();
 #endif
 
 #include "embedded_editor/embedded_editor_main.h"
+#include "portal_mod_vision.h" // portal-mod E76
 
 bool g_bDisableAllInput = false;
 
@@ -118,6 +119,9 @@ extern bool g_block_all_except_movement;
 void CLevel::IR_OnKeyboardPress(int key)
 {
     if (Editor_KeyPress(key))
+        return;
+
+    if (pm_vision::key_press(key)) // portal-mod E76: the machine vision's key, in the game and in a replay
         return;
 
     if (pm_replay::key_press(key)) // portal-mod E53: Insert / Home / End in the game, every key but the console's in a replay

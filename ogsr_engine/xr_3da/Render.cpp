@@ -24,3 +24,5 @@ ENGINE_API u32 portal_mod_replay_rain_ms{}; // portal-mod E53b
 ENGINE_API u32 portal_mod_replay_rain_dms{};
 ENGINE_API float portal_mod_replay_rain_dt{};
 ENGINE_API Fvector portal_mod_replay_wind{};
+#include "portal_mod_vision_shared.h" // portal-mod E76: the machine vision
+ENGINE_API portal_mod_vision_frame portal_mod_vision{}; // portal-mod E76
