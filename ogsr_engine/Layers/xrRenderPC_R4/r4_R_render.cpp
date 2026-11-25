@@ -279,6 +279,14 @@ struct PortalModIbJob // portal-mod E54 (r4_loader.cpp)
     xr_vector<u16> data;
 };
 extern xr_vector<PortalModIbJob> portal_mod_ib_jobs;
+struct PortalModIbPart // portal-mod E59 (r4_loader.cpp)
+{
+    bool fast;
+    u32 ib;
+    u32 off;
+    xr_vector<u16> data;
+};
+extern xr_vector<PortalModIbPart> portal_mod_ib_parts;
 
 void CRender::Render()
 {
@@ -300,6 +308,24 @@ void CRender::Render()
                 HW.get_context(CHW::IMM_CTX_ID)->UpdateSubresource(v[j.ib], 0, nullptr, j.data.data(), 0, 0);
         }
         portal_mod_ib_jobs.clear();
+    }
+
+    if (!portal_mod_ib_parts.empty()) // portal-mod E59: a broken pole's, fence piece's, lamp's triangles out (or back)
+    {
+        for (const auto& j : portal_mod_ib_parts)
+        {
+            auto& v = j.fast ? xIB : nIB;
+            if (j.ib >= v.size() || !v[j.ib] || j.data.empty())
+                continue;
+            D3D11_BUFFER_DESC d{};
+            v[j.ib]->GetDesc(&d);
+            const u32 b0 = j.off * 2, b1 = (j.off + (u32)j.data.size()) * 2;
+            if (b1 > d.ByteWidth)
+                continue;
+            const D3D11_BOX box{b0, 0, 0, b1, 1, 1};
+            HW.get_context(CHW::IMM_CTX_ID)->UpdateSubresource(v[j.ib], 0, &box, j.data.data(), 0, 0);
+        }
+        portal_mod_ib_parts.clear();
     }
 
     VERIFY(0 == mapDistort.size());

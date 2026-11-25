@@ -283,6 +283,22 @@ int portal_mod_sun_cascade(u32 context_id)
 bool portal_mod_ctx_smap(u32 context_id) { return RImplementation.get_context(context_id).phase == CRender::PHASE_SMAP; }
 void portal_mod_render_queue_ib(bool fast, u32 ib, const u16* data, u32 count) { portal_mod_ib_jobs.push_back(PortalModIbJob{fast, ib, xr_vector<u16>(data, data + count)}); }
 
+// portal-mod E59: a range of a level index buffer (a broken pole's, fence piece's, lamp's triangles written degenerate,
+// or put back), written at the next frame's render after E54's whole buffers (r4_R_render.cpp)
+struct PortalModIbPart
+{
+    bool fast;
+    u32 ib;
+    u32 off; // in indices
+    xr_vector<u16> data;
+};
+xr_vector<PortalModIbPart> portal_mod_ib_parts;
+void portal_mod_render_queue_ib_part(bool fast, u32 ib, u32 off, const u16* data, u32 count)
+{
+    if (data && count)
+        portal_mod_ib_parts.push_back(PortalModIbPart{fast, ib, off, xr_vector<u16>(data, data + count)});
+}
+
 // portal-mod E58: falling trees (xrGame/portal_mod_trees.cpp). Every MU instance of the level - an FLOD and its parts
 // (trunk, branches, the cut; each part drawn instanced by the instance's own 3x4 matrix in tree_data) - is listed once.
 // The game queues a new matrix (the parts' instance data and boxes follow, the FLOD leaves the static walk and

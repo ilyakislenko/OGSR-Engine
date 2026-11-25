@@ -186,6 +186,7 @@ BOOL CBulletManager::firetrace_callback(collide::rq_result& result, LPVOID param
         else if (fsimilar(mtl->fShootFactor, 1.0f, EPS)) //Если материал полностью простреливаемый
         {
             pData->bStopTracing = false;
+            portal_mod_destruct::bullet_pass(*bullet, (u32)result.element, end_point); // portal-mod E61: a pane of glass breaks
         }
         else
             Level().BulletManager().RegisterEvent(EVENT_HIT, FALSE, bullet, end_point, result, hit_material_idx);

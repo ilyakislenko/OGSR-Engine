@@ -77,6 +77,9 @@ public:
 
     void build(const Fvector* V, const size_t Vcnt, const TRI* T, const size_t Tcnt, build_callback* bc = nullptr, void* bcp = nullptr);
     u32 memory();
+    // portal-mod E60: the tree's bounds fitted again after triangles were moved in place (a crater's): the nodes over
+    // triangles from pool_from on alone exactly (one at the vertex `sink` counts for nothing), the others only grow
+    bool refit(size_t pool_from, u32 sink);
 private:
 
     void build_internal(const Fvector* V, const size_t Vcnt, const TRI* T, const size_t Tcnt, build_callback* bc = nullptr, void* bcp = nullptr);

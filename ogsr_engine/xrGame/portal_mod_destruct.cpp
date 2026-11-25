@@ -27,6 +27,8 @@
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
 #include "portal_mod_props.h" // portal-mod E57: breakable props (their update and reset ride on this module's)
 #include "portal_mod_trees.h" // portal-mod E58: falling trees (the same)
+#include "portal_mod_statics.h" // portal-mod E59: poles, fences, lamps and wires (the same)
+#include "portal_mod_craters.h" // portal-mod E60: craters in the ground (the same)
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "ParticlesObject.h"
@@ -74,6 +76,8 @@ enum : u8
 constexpr u32 ISLAND_MAGIC = 0x50444953;
 constexpr int NMAT = 3; // concrete, brick, wood (tools/destruct_build.py MATERIALS order)
 LPCSTR const MAT_KEY[NMAT] = {"concrete", "brick", "wood"};
+constexpr u8 HOLE_SHEET = NMAT + 1; // E60: a sheet of tin, steel plate or slate - rounds hole it each where it hits (no chips, no dents)
+constexpr int DENT_EARTH = NMAT; // E60: a dent of fresh earth (a crater's, a pit's) - its own bowls (destruct_build.py's "earth" set)
 LPCSTR const CHIP_SIZE[4] = {"s", "m", "l", "x"};
 const float CHIP_R[4] = {0.025f, 0.06f, 0.16f, 0.3f}; // the chip models' radius about their centre
 constexpr int DENT_VARS = 6; // E56: a dent's bowl models per material (tools/destruct_build.py write_dents): 0-3 a round's, 4-5 a blast's
@@ -121,8 +125,17 @@ struct Cfg
     // radius on the wall's faces hole_r0 + hole_r_k * (damage past the need), up to hole_r_max
     float hole_min_dmg{9.f}, hole_max_thick{0.45f};
     float hole_need[NMAT]{260.f, 160.f, 70.f};
+    float hole_need_sheet{12.f}, hole_r0_sheet{0.008f}, hole_r_k_sheet{0.004f}, sheet_thick{0.004f}; // E60
     float hole_r0{0.06f}, hole_r_k{0.0028f}, hole_r_max{0.33f};
+    // E59: a plank fence's piece (portal_mod_statics::thin_at: its kind's thickness, no far face to measure) takes holes
+    // from any round of hole_min_dmg_thin or more, hole_r0_thin + hole_r_k_thin x the damage past the need
+    float hole_min_dmg_thin{1.f}, hole_r0_thin{0.02f}, hole_r_k_thin{0.012f};
     int max_holes{64};
+    // E62: breaches - a blast within breach_reach of a wall no thicker than breach_max_thick opens it: on its faces a radius
+    // of breach_k x sqrt(hit) x sqrt(1 - d / reach) x the material's x (1.25 - thickness / max, 0.35..1), up to breach_r_max;
+    // another blast there widens it (the radii add as squares); its collision cut in a square of breach_cut_k x the radius
+    float breach_k{0.5f}, breach_reach{1.2f}, breach_max_thick{0.5f}, breach_r_min{0.12f}, breach_r_max{1.f}, breach_cut_k{0.75f};
+    float breach_mat[NMAT]{0.8f, 1.f, 1.3f};
     // E56 dents: a round of at least dent_min_dmg into stone, concrete, brick or wood anywhere (any thickness, one face
     // or two) adds up at the spot - with the rounds before it within the dent's radius + dent_merge on the same face;
     // past dent_need it is a dent: the face cut away inside a ragged dark edge, a bowl behind it. Its radius dent_r0 x
@@ -132,6 +145,7 @@ struct Cfg
     bool dents{true};
     float dent_min_dmg{2.f}, dent_need{5.f}, dent_merge{0.1f};
     float dent_r0{0.05f}, dent_scale[NMAT]{1.f, 1.15f, 1.3f}, dent_r_max{0.32f}, dent_r_max_blast{0.75f}, dent_depth{0.45f};
+    float dent_scale_earth{1.6f}, dent_r_max_earth{0.45f}; // E60: a pit rounds dig in the ground
     float dent_band{0.5f}, dent_band_blast{1.2f}; // round its edge, x its radius: a round's light dust, a blast's soot
     int max_dents{400}, dent_draw{48};
     float dent_draw_dist{70.f};
@@ -431,7 +445,7 @@ struct Hole
 {
     Fvector c{}; // the middle of the wall's thickness under the first hit
     Fvector dir{}; // the first round's direction
-    float thick{}, need{}, dmg{}, r{}; // r: the sphere's radius once open (0: still closed)
+    float thick{}, need{}, dmg{}, r{}; // r: the sphere's radius once open (0: still closed); E62: need < 0 - a breach
     int piece{-1}; // on a building's standing piece (the hole goes with the piece)
     u8 mat{};
     u32 time{};
@@ -588,10 +602,25 @@ void load_cfg()
     C.hole_max_thick = cfg_f(s, "hole_max_thickness", C.hole_max_thick);
     for (int m = 0; m < NMAT; ++m)
         C.hole_need[m] = cfg_f(s, (xr_string("hole_need_") + MAT_KEY[m]).c_str(), C.hole_need[m]);
+    C.hole_need_sheet = cfg_f(s, "hole_need_sheet", C.hole_need_sheet); // E60
+    C.hole_r0_sheet = cfg_f(s, "hole_radius_min_sheet", C.hole_r0_sheet);
+    C.hole_r_k_sheet = cfg_f(s, "hole_radius_k_sheet", C.hole_r_k_sheet);
+    C.sheet_thick = cfg_f(s, "sheet_thickness", C.sheet_thick);
     C.hole_r0 = cfg_f(s, "hole_radius_min", C.hole_r0);
     C.hole_r_k = cfg_f(s, "hole_radius_k", C.hole_r_k);
     C.hole_r_max = cfg_f(s, "hole_radius_max", C.hole_r_max);
+    C.hole_min_dmg_thin = cfg_f(s, "hole_min_damage_thin", C.hole_min_dmg_thin); // E59
+    C.hole_r0_thin = cfg_f(s, "hole_radius_min_thin", C.hole_r0_thin);
+    C.hole_r_k_thin = cfg_f(s, "hole_radius_k_thin", C.hole_r_k_thin);
     C.max_holes = (int)cfg_f(s, "max_holes", (float)C.max_holes);
+    C.breach_k = cfg_f(s, "breach_k", C.breach_k); // E62
+    C.breach_reach = cfg_f(s, "breach_reach", C.breach_reach);
+    C.breach_max_thick = cfg_f(s, "breach_max_thickness", C.breach_max_thick);
+    C.breach_r_min = cfg_f(s, "breach_radius_min", C.breach_r_min);
+    C.breach_r_max = cfg_f(s, "breach_radius_max", C.breach_r_max);
+    C.breach_cut_k = cfg_f(s, "breach_cut_k", C.breach_cut_k);
+    for (int m = 0; m < NMAT; ++m)
+        C.breach_mat[m] = cfg_f(s, (xr_string("breach_") + MAT_KEY[m]).c_str(), C.breach_mat[m]);
     C.dents = !pSettings->line_exist(s, "dents") || pSettings->r_bool(s, "dents"); // E56
     C.dent_min_dmg = cfg_f(s, "dent_min_damage", C.dent_min_dmg);
     C.dent_need = _max(0.1f, cfg_f(s, "dent_need", C.dent_need));
@@ -600,6 +629,8 @@ void load_cfg()
     for (int m = 0; m < NMAT; ++m)
         C.dent_scale[m] = cfg_f(s, (xr_string("dent_scale_") + MAT_KEY[m]).c_str(), C.dent_scale[m]);
     C.dent_r_max = cfg_f(s, "dent_radius_max", C.dent_r_max);
+    C.dent_scale_earth = cfg_f(s, "dent_scale_earth", C.dent_scale_earth); // E60
+    C.dent_r_max_earth = cfg_f(s, "dent_radius_max_earth", C.dent_r_max_earth);
     C.dent_r_max_blast = cfg_f(s, "dent_radius_max_blast", C.dent_r_max_blast);
     C.dent_depth = cfg_f(s, "dent_depth", C.dent_depth);
     C.dent_band = cfg_f(s, "dent_band", C.dent_band);
@@ -902,11 +933,28 @@ u8 chip_class(u16 mtl_idx)
             else if (n.find("wood") != xr_string::npos)
                 S.mtl_class[i] = 2;
             else if (n.find("concrete") != xr_string::npos || n.find("stone") != xr_string::npos || n.find("asphalt") != xr_string::npos ||
-                     n.find("tile") != xr_string::npos)
+                     n.find("tile") != xr_string::npos || n.find("stucco") != xr_string::npos) // E60: plaster too
                 S.mtl_class[i] = 0;
         }
     }
     return mtl_idx < S.mtl_class.size() ? S.mtl_class[mtl_idx] : 255;
+}
+
+// E60: a sheet - tin, steel plate, slate (materials\tin, metal_plate, shifer): a garage's wall, a roof, a shed
+bool is_sheet(u16 mtl_idx)
+{
+    static xr_vector<u8> sheet;
+    if (sheet.empty())
+    {
+        sheet.assign(GMLib.CountMaterial(), 0);
+        u16 i = 0;
+        for (auto it = GMLib.FirstMaterial(); it != GMLib.LastMaterial(); ++it, ++i)
+        {
+            const xr_string n = (*it)->m_Name.c_str();
+            sheet[i] = n == "materials\\tin" || n.find("metal_plate") != xr_string::npos || n.find("shifer") != xr_string::npos;
+        }
+    }
+    return mtl_idx < sheet.size() && sheet[mtl_idx];
 }
 
 void add_chip(u8 mat, int size, const Fvector& p, const Fvector& v, float life)
@@ -984,44 +1032,69 @@ bool hole_contains(const Fvector& p, float k)
     return false;
 }
 
-// a round of `dmg` into a wall at `point` along `dir`: the wall's thickness behind it, the damage added up at the spot
-void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int pc)
+// the oldest round's hole goes (E62: a breach stays - its collision is cut); false: none to drop
+bool evict_hole()
 {
-    if (mat >= NMAT || dmg < C.hole_min_dmg)
+    int oldest = -1;
+    for (u32 i = 0; i < S.holes.size(); ++i)
+        if (S.holes[i].need >= 0.f && (oldest < 0 || S.holes[i].time < S.holes[oldest].time))
+            oldest = (int)i;
+    if (oldest < 0)
+        return false;
+    S.holes.erase(S.holes.begin() + oldest);
+    return true;
+}
+
+// a round of `dmg` into a wall at `point` along `dir`: the wall's thickness behind it, the damage added up at the spot
+// (E59: thin > 0 - a plank fence's piece that thick, under 3 cm: no far face to look for; a wall under 6 cm - planks -
+// takes the thin ones' rounds and radii too)
+void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int pc, float thin)
+{
+    const bool sheet = mat == HOLE_SHEET; // E60
+    if ((mat >= NMAT && !sheet) || dmg < _min(C.hole_min_dmg, C.hole_min_dmg_thin))
         return;
-    // the far face: a ray on from just inside the wall (the static model has both sides of its faces)
-    collide::rq_result R;
-    Fvector p0;
-    p0.mad(point, dir, 0.012f);
-    if (!Level().ObjectSpace.RayPick(p0, dir, C.hole_max_thick, collide::rqtStatic, R, nullptr) || R.element < 0)
-        return; // thicker than hole_max_thick (or one-sided): chips only
-    const float thick = R.range + 0.012f;
-    if (thick < 0.03f)
+    float thick = thin;
+    if (sheet && thin <= 0.f)
+    {
+        // its far face if it has one (a few cm at most), else sheet_thickness
+        collide::rq_result R;
+        Fvector p0;
+        p0.mad(point, dir, 0.002f);
+        thick = Level().ObjectSpace.RayPick(p0, dir, 0.06f, collide::rqtStatic, R, nullptr) && R.element >= 0 ? _max(R.range + 0.002f, C.sheet_thick) : C.sheet_thick;
+    }
+    else if (thin <= 0.f)
+    {
+        // the far face: a ray on from just inside the wall (the static model has both sides of its faces)
+        collide::rq_result R;
+        Fvector p0;
+        p0.mad(point, dir, 0.012f);
+        if (!Level().ObjectSpace.RayPick(p0, dir, C.hole_max_thick, collide::rqtStatic, R, nullptr) || R.element < 0)
+            return; // thicker than hole_max_thick (or one-sided): chips only
+        thick = R.range + 0.012f;
+        if (thick < 0.03f)
+            return;
+    }
+    if (dmg < (thick < 0.06f ? C.hole_min_dmg_thin : C.hole_min_dmg))
         return;
     Fvector c;
     c.mad(point, dir, thick * 0.5f);
     Hole* h = nullptr;
     for (Hole& o : S.holes)
-        if (o.c.distance_to(c) < _max(o.r, 0.14f) + 0.04f && o.piece == pc)
+        if (o.piece == pc && o.need >= 0.f && // E62: not a breach (its own radius)
+            (sheet ? o.mat == HOLE_SHEET && o.c.distance_to(c) < _max(o.r, 0.035f) + 0.012f : o.c.distance_to(c) < _max(o.r, 0.14f) + 0.04f))
         {
             h = &o;
             break;
         }
     if (!h)
     {
-        if ((int)S.holes.size() >= C.max_holes)
-        {
-            u32 oldest = 0;
-            for (u32 i = 1; i < S.holes.size(); ++i)
-                if (S.holes[i].time < S.holes[oldest].time)
-                    oldest = i;
-            S.holes.erase(S.holes.begin() + oldest);
-        }
+        if ((int)S.holes.size() >= C.max_holes && !evict_hole())
+            return;
         Hole n;
         n.c = c;
         n.dir = dir;
         n.thick = thick;
-        n.need = C.hole_need[mat] * thick;
+        n.need = (sheet ? C.hole_need_sheet : C.hole_need[mat]) * thick;
         n.piece = pc;
         n.mat = mat;
         S.holes.push_back(n);
@@ -1032,8 +1105,11 @@ void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int p
     if (h->dmg < h->need)
         return;
     const bool opened = h->r <= 0.f;
-    const float rf = _min(C.hole_r_max, C.hole_r0 + C.hole_r_k * (h->dmg - h->need));
-    const float half = h->thick * 0.5f + 0.03f;
+    const bool thin_h = h->thick < 0.06f; // E59: planks (a plank fence's piece, a wall under 6 cm): small, growing with each round
+    const float grow = h->dmg - h->need;
+    const float rf = _min(C.hole_r_max, sheet ? C.hole_r0_sheet + C.hole_r_k_sheet * grow
+                                              : (thin_h ? C.hole_r0_thin + C.hole_r_k_thin * grow : C.hole_r0 + C.hole_r_k * grow));
+    const float half = h->thick * 0.5f + (sheet ? 0.006f : 0.03f); // E60: a sheet's sphere hugs it (its hole as small as a round's)
     h->r = _sqrt(rf * rf + half * half);
     if (opened)
     {
@@ -1045,8 +1121,159 @@ void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int p
         Fvector exit;
         exit.mad(h->c, h->dir, half);
         chips_at(exit, h->dir, h->dir, _max(dmg, 12.f), mat);
-        Msg("* [destruct] a hole through a %.2f m wall (%s) at [%.2f, %.2f, %.2f], radius %.2f m on its faces", h->thick, MAT_KEY[mat], VPUSH(h->c), rf);
+        Msg("* [destruct] a hole through a %.2f m wall (%s) at [%.2f, %.2f, %.2f], radius %.2f m on its faces", h->thick, sheet ? "sheet" : MAT_KEY[mat], VPUSH(h->c), rf);
     }
+}
+
+// E62: a blast at a wall breaches it - the nearest flat face of stone, concrete, brick or wood within breach_reach (16
+// ways round, level with the blast and 0.45 m over it; not a building's piece, not a pole's or fence's), the wall no
+// thicker than breach_max_thick: a hole through it (drawn as E54b's, bullets fly through), its collision cut in a square
+// inside it (portal_mod_craters::breach: whoever fits walks through), the floor and the ceiling on the blast's side and
+// the wall's ends kept out of its sphere (the shaders cut whatever is inside it), debris out of both faces. Another
+// blast there widens it.
+void breach_blast(const Fvector& pos, float hit)
+{
+    if (C.breach_k <= 0.f || hit <= 0.f || !g_pGameLevel)
+        return;
+    const CDB::TRI* T = Level().ObjectSpace.GetStaticTris();
+    const Fvector* V = Level().ObjectSpace.GetStaticVerts();
+    collide::rq_result R;
+    float best = flt_max;
+    Fvector P{}, n{};
+    u8 mat = NMAT;
+    for (int hg = 0; hg < 2; ++hg)
+        for (int a = 0; a < 16; ++a)
+        {
+            const float an = float(a) * PI_MUL_2 / 16.f;
+            const Fvector d{_cos(an), 0.f, _sin(an)};
+            const Fvector o{pos.x, pos.y + 0.1f + 0.45f * float(hg), pos.z};
+            if (!Level().ObjectSpace.RayPick(o, d, C.breach_reach, collide::rqtStatic, R, nullptr) || R.element < 0 || R.range >= best)
+                continue;
+            const CDB::TRI& t = T[R.element];
+            const u8 m = chip_class(u16(t.material));
+            if (m >= NMAT || piece_of_tri((u32)R.element) >= 0 || portal_mod_statics::owns((u32)R.element))
+                continue;
+            Fvector tn;
+            tn.mknormal(V[t.verts[0]], V[t.verts[1]], V[t.verts[2]]);
+            if (_abs(tn.y) > 0.25f)
+                continue; // a floor, a slope, a slab
+            if (tn.dotproduct(d) > 0.f)
+                tn.invert(); // towards the blast
+            best = R.range;
+            P.mad(o, d, R.range);
+            n.set(tn.x, 0.f, tn.z);
+            n.normalize_safe();
+            mat = m;
+        }
+    if (mat >= NMAT)
+        return;
+    const Fvector in{-n.x, 0.f, -n.z}; // into the wall
+    const Fvector u{-n.z, 0.f, n.x}; // along it
+    // a flat face at least 0.7 m wide (not a trunk, a pipe, a post): 0.35 m to each side it is as near
+    for (int sd = -1; sd <= 1; sd += 2)
+    {
+        Fvector o;
+        o.mad(P, n, 0.3f).mad(u, 0.35f * float(sd));
+        if (!Level().ObjectSpace.RayPick(o, in, 0.6f, collide::rqtStatic, R, nullptr) || R.element < 0 || _abs(R.range - 0.3f) > 0.08f)
+            return;
+    }
+    // the wall's thickness: its far face (the static model has both sides of its faces)
+    Fvector p0;
+    p0.mad(P, in, 0.012f);
+    if (!Level().ObjectSpace.RayPick(p0, in, C.breach_max_thick, collide::rqtStatic, R, nullptr) || R.element < 0)
+        return; // thicker, or one-sided: dents only
+    float thick = R.range + 0.012f;
+    if (thick < 0.04f)
+        return; // planks, a sheet: their own holes
+    float rf = C.breach_k * _sqrt(hit) * _sqrt(_max(0.f, 1.f - best / C.breach_reach)) * C.breach_mat[mat] *
+        clampr(1.25f - thick / C.breach_max_thick, 0.35f, 1.f);
+    Fvector c;
+    c.mad(P, in, thick * 0.5f);
+    // a breach there already: it widens
+    Hole* h = nullptr;
+    for (Hole& o : S.holes)
+        if (o.need < 0.f && o.c.distance_to(c) < o.r + rf * 0.5f)
+        {
+            h = &o;
+            break;
+        }
+    float rf0 = 0.f;
+    if (h)
+    {
+        const float half0 = h->thick * 0.5f + 0.03f;
+        rf0 = _sqrt(_max(0.f, h->r * h->r - half0 * half0));
+        rf = _sqrt(rf0 * rf0 + rf * rf);
+        c = h->c;
+        thick = h->thick;
+    }
+    rf = _min(rf, C.breach_r_max);
+    if (rf < C.breach_r_min || rf <= rf0 + 0.02f)
+        return;
+    const float half = thick * 0.5f + 0.03f;
+    // room for its sphere: the floor and the ceiling on the blast's side, the wall's ends inside it
+    Fvector side;
+    side.mad(c, n, half + 0.2f);
+    float fy = c.y - 50.f, cy = c.y + 50.f;
+    if (Level().ObjectSpace.RayPick(side, Fvector{0.f, -1.f, 0.f}, 6.f, collide::rqtStatic, R, nullptr) && R.element >= 0)
+        fy = side.y - R.range;
+    if (Level().ObjectSpace.RayPick(side, Fvector{0.f, 1.f, 0.f}, 6.f, collide::rqtStatic, R, nullptr) && R.element >= 0)
+        cy = side.y + R.range;
+    for (int sd = -1; sd <= 1; sd += 2)
+    {
+        Fvector d;
+        d.set(u).mul(float(sd));
+        if (Level().ObjectSpace.RayPick(c, d, rf + 0.3f, collide::rqtStatic, R, nullptr) && R.element >= 0)
+            rf = _min(rf, R.range - 0.05f);
+    }
+    float rs = _sqrt(rf * rf + half * half);
+    if (cy - fy < 2.f * rs + 0.06f)
+    {
+        rs = 0.5f * (cy - fy) - 0.03f;
+        rf = rs > half ? _sqrt(rs * rs - half * half) : 0.f;
+    }
+    if (rf < C.breach_r_min || rf <= rf0 + 0.02f)
+        return;
+    const float y0 = c.y;
+    c.y = clampr(c.y, fy + rs + 0.03f, cy - rs - 0.03f);
+    if (!h && _abs(c.y - y0) > 0.01f)
+    {
+        // moved up (or down) off the floor: the wall must be there too
+        const Fvector o{side.x, c.y, side.z};
+        if (!Level().ObjectSpace.RayPick(o, in, half + 0.4f, collide::rqtStatic, R, nullptr) || R.element < 0 || R.range > 0.3f)
+            return;
+    }
+    if (!h)
+    {
+        if ((int)S.holes.size() >= C.max_holes && !evict_hole())
+            return;
+        Hole nh;
+        nh.dir = in;
+        nh.thick = thick;
+        nh.need = -1.f; // a breach
+        nh.mat = mat;
+        S.holes.push_back(nh);
+        h = &S.holes.back();
+        ++S.holes_open;
+    }
+    h->c = c;
+    h->r = rs;
+    h->time = Device.dwTimeGlobal;
+    const Fvector hc = c;
+    S.dents.erase(std::remove_if(S.dents.begin(), S.dents.end(), [&hc, rs](const Dent& d) { return d.piece < 0 && d.c.distance_to(hc) < rs; }), S.dents.end());
+    const bool cut = portal_mod_craters::breach(c, n, rf * C.breach_cut_k, thick);
+    // debris out of both faces
+    for (int i = 0; i < 2; ++i)
+    {
+        Fvector q;
+        q.mad(c, u, ::Random.randF(-0.6f, 0.6f) * rf).y += ::Random.randF(-0.6f, 0.6f) * rf;
+        Fvector f;
+        f.mad(q, n, half);
+        chips_at(f, n, in, 60.f, mat);
+        f.mad(q, in, half);
+        chips_at(f, in, in, 60.f, mat);
+    }
+    Msg("* [destruct] a breach through a %.2f m wall (%s) at [%.2f, %.2f, %.2f]: radius %.2f m%s, its collision %s; the blast %.2f m off, hit %.2f", thick,
+        MAT_KEY[mat], VPUSH(c), rf, rf0 > 0.f ? " (widened)" : "", cut ? "cut" : "NOT cut", best, hit);
 }
 
 // the holes for the shaders: the 32 open ones nearest the camera; a piece's hole goes when the piece leaves
@@ -1091,6 +1318,15 @@ void make_dent_models()
                 Msg("! [destruct] no dent model %s: such dents are not drawn", n);
             S.dent_models.push_back(vis);
         }
+    for (int v = 0; v < DENT_VARS; ++v) // E60: fresh earth (DENT_EARTH's, right after the materials')
+    {
+        string_path n;
+        xr_sprintf(n, "portal_mod\\destruct\\dents\\earth_%d", v);
+        IRenderVisual* vis = ::Render->model_Create(n);
+        if (!vis)
+            Msg("! [destruct] no dent model %s: such dents are not drawn", n);
+        S.dent_models.push_back(vis);
+    }
 }
 
 // the bowl reaching out to rho all round is hidden behind the face or what stands on it: 8 ways out along the face - a
@@ -1125,6 +1361,30 @@ bool dent_fits(const Fvector& c, const Fvector& n, const Fvector& t, float rho)
     return true;
 }
 
+// E60: a pit's bowl in the ground reaching out to rho: no wall, trunk or slab within it (8 ways out, a little over the
+// ground) and ground under each way's end (no edge, no drop) - the ground's own bumps and slopes do not count
+bool dent_fits_earth(const Fvector& c, const Fvector& n, const Fvector& t, float rho)
+{
+    Fvector b, back;
+    b.crossproduct(n, t);
+    back.invert(n);
+    collide::rq_result R;
+    const float lift = 0.08f + 0.15f * rho;
+    for (int k = 0; k < 8; ++k)
+    {
+        const float a = float(k) * PI_DIV_4;
+        Fvector u, s0, q;
+        u.set(0.f, 0.f, 0.f).mad(t, _cos(a)).mad(b, _sin(a));
+        s0.mad(c, n, lift);
+        if (Level().ObjectSpace.RayPick(s0, u, rho, collide::rqtStatic, R, nullptr) && R.element >= 0)
+            return false;
+        q.mad(s0, u, rho);
+        if (!Level().ObjectSpace.RayPick(q, back, lift + 0.4f * rho + 0.1f, collide::rqtStatic, R, nullptr) || R.element < 0)
+            return false;
+    }
+    return true;
+}
+
 // the radius it may have, up to `want`: as big as the face round it holds (at a corner or an edge it stays smaller)
 float dent_fit(Dent& d, float want)
 {
@@ -1133,7 +1393,7 @@ float dent_fit(Dent& d, float want)
     if (want <= d.checked)
         return want;
     for (float r = want; r >= 0.025f; r *= 0.8f)
-        if (dent_fits(d.c, d.n, d.t, r * DENT_RIM))
+        if (d.mat == DENT_EARTH ? dent_fits_earth(d.c, d.n, d.t, r * DENT_RIM) : dent_fits(d.c, d.n, d.t, r * DENT_RIM)) // E60
         {
             if (r < want)
                 d.cap = r;
@@ -1149,7 +1409,9 @@ void dent_grow(Dent& d)
 {
     if (d.dmg < C.dent_need)
         return;
-    const float want = _min(d.blast ? C.dent_r_max_blast : C.dent_r_max, C.dent_r0 * C.dent_scale[d.mat] * _sqrt(d.dmg / C.dent_need));
+    const bool earth = d.mat == DENT_EARTH; // E60: a pit in the ground
+    const float want = _min(d.blast ? C.dent_r_max_blast : (earth ? C.dent_r_max_earth : C.dent_r_max),
+                            C.dent_r0 * (earth ? C.dent_scale_earth : C.dent_scale[d.mat]) * _sqrt(d.dmg / C.dent_need));
     if (want <= d.r + 0.002f)
         return;
     const float r = dent_fit(d, want);
@@ -1157,12 +1419,33 @@ void dent_grow(Dent& d)
         return;
     d.r = r;
     d.depth = _max(0.012f, _min(C.dent_depth * r, 0.6f * d.thick));
+    if (earth && !d.blast)
+        portal_mod_craters::pit(d.c, d.r, d.depth); // E60: its collision dug too (past pit_radius_min, as it grows)
+}
+
+// room for one more dent: the oldest goes - not a crater's or a dug pit's while there is another (E60: its collision stays dug)
+void evict_dent()
+{
+    if ((int)S.dents.size() < _max(C.max_dents, 1))
+        return;
+    int oldest = -1, any = 0;
+    for (u32 i = 0; i < S.dents.size(); ++i)
+    {
+        const Dent& d = S.dents[i];
+        if (S.dents[i].time < S.dents[any].time)
+            any = (int)i;
+        if (d.mat == DENT_EARTH && (d.blast || d.r >= 0.15f))
+            continue;
+        if (oldest < 0 || d.time < S.dents[oldest].time)
+            oldest = (int)i;
+    }
+    S.dents.erase(S.dents.begin() + (oldest >= 0 ? oldest : any));
 }
 
 // a round (or a blast) of `dmg` on a face at `point` coming along `dir`: added up at the spot, a dent past dent_need
 void dent_hit(const Fvector& point, const Fvector& normal, const Fvector& dir, float dmg, u8 mat, int pc, bool blast)
 {
-    if (!C.dents || mat >= NMAT || dmg < (blast ? C.dent_need : C.dent_min_dmg) || !g_pGameLevel)
+    if (!C.dents || mat > DENT_EARTH || dmg < (blast ? C.dent_need : C.dent_min_dmg) || !g_pGameLevel) // E60: the earth too
         return;
     if (pc >= 0 && (pc >= (int)S.pieces.size() || S.pieces[pc].state != ST_INTACT))
         return;
@@ -1195,14 +1478,7 @@ void dent_hit(const Fvector& point, const Fvector& normal, const Fvector& dir, f
     }
     if (!d)
     {
-        if ((int)S.dents.size() >= _max(C.max_dents, 1))
-        {
-            u32 oldest = 0;
-            for (u32 i = 1; i < S.dents.size(); ++i)
-                if (S.dents[i].time < S.dents[oldest].time)
-                    oldest = i;
-            S.dents.erase(S.dents.begin() + oldest);
-        }
+        evict_dent();
         Dent nd;
         nd.c = point;
         nd.n = n;
@@ -1316,6 +1592,47 @@ void blast_dents(const Fvector& pos, float radius, float hit)
     if (!spots.empty())
         Msg("* [destruct] a blast (%.1f, %.0f m) at [%.2f, %.2f, %.2f]: %u faces round it, %u dents made, the nearest %.2f m off", hit, radius, VPUSH(pos),
             (u32)spots.size(), made, spots[0].d);
+}
+
+// E60: a crater's dent - fresh earth as wide as the crater and as deep as the craters dug there all told (one dug there
+// before grows into it); drawn as the collision was dug: the same profile (destruct_build.py's earth bowls)
+void crater_dent(const Fvector& c, const Fvector& n, float r, float depth)
+{
+    if (!C.dents || !g_pGameLevel)
+        return;
+    const float total = _max(depth, portal_mod_craters::depth_at(c));
+    for (Dent& o : S.dents)
+        if (o.mat == DENT_EARTH && o.piece < 0 && o.c.distance_to(c) < _max(o.r, r) * 0.6f)
+        {
+            o.r = _max(o.r, r);
+            o.depth = _max(o.depth, total);
+            o.dmg = _max(o.dmg, 1000.f);
+            o.checked = o.r;
+            o.cap = -1.f;
+            if (!o.blast)
+                o.blast = true, o.var = u8(4 + ::Random.randI(2));
+            o.time = Device.dwTimeGlobal;
+            return;
+        }
+    evict_dent();
+    Dent nd;
+    nd.c = c;
+    nd.n = n;
+    Fvector up;
+    Fvector::generate_orthonormal_basis_normalized(nd.n, up, nd.t);
+    nd.seed = ::Random.randF(0.f, PI_MUL_2);
+    nd.mat = DENT_EARTH;
+    nd.piece = -1;
+    nd.blast = true;
+    nd.var = u8(4 + ::Random.randI(2));
+    nd.id = ++S.dent_ids;
+    nd.thick = 1.f;
+    nd.r = r;
+    nd.depth = total;
+    nd.dmg = 1000.f;
+    nd.checked = r;
+    nd.time = Device.dwTimeGlobal;
+    S.dents.push_back(nd);
 }
 
 // the dents for the shaders and their bowls: the dent_draw nearest the camera within dent_draw_dist, the nearest first
@@ -2898,7 +3215,8 @@ void restore()
             d.time = Device.dwTimeGlobal;
             d.id = ++S.dent_ids;
             d.checked = d.r;
-            if (d.mat < NMAT && d.var < DENT_VARS && (d.piece < 0 || (building && d.piece < (int)S.pieces.size() && S.pieces[d.piece].state == ST_INTACT)))
+            // E60: the earth's (a crater's, a pit's) too
+            if (d.mat <= DENT_EARTH && d.var < DENT_VARS && (d.piece < 0 || (building && d.piece < (int)S.pieces.size() && S.pieces[d.piece].state == ST_INTACT)))
             {
                 S.dents.push_back(d);
                 ++dents;
@@ -2928,6 +3246,8 @@ void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& 
 {
     if (b.pm_destruct > 0.f) // E58: a round on a trunk (the trees' own switch)
         portal_mod_trees::bullet_hit(point, b.dir, tri, b.pm_destruct * (b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f));
+    if (b.pm_destruct > 0.f) // E59: a round on a pole, a fence, a lamp (the same)
+        portal_mod_statics::bullet_hit(point, b.dir, tri, b.pm_destruct * (b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f));
     if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || b.pm_destruct <= 0.f) // portal-mod E55: My Mods
         return;
     const float sp = b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f;
@@ -2935,10 +3255,18 @@ void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& 
     const int pc = piece_of_tri(tri);
     const u8 mat = pc >= 0 ? S.pieces[pc].mat : chip_class(target_material);
     chips_at(point, normal, b.dir, dmg, mat);
+    if (pc < 0 && mat >= NMAT && portal_mod_craters::is_soil(target_material)) // E60: a pit in the ground, its collision dug as it grows
+    {
+        dent_hit(point, normal, b.dir, dmg, u8(DENT_EARTH), -1, false);
+        return;
+    }
     if (pc < 0 || S.pieces[pc].state == ST_INTACT)
     {
-        hole_hit(point, b.dir, dmg, mat, pc);
-        dent_hit(point, normal, b.dir, dmg, mat, pc, false); // E56: any face, any thickness
+        const float thin = pc < 0 ? portal_mod_statics::thin_at(tri) : 0.f; // E59: a plank fence's piece: holes, no dents
+        const u8 hmat = pc < 0 && mat >= NMAT && is_sheet(target_material) ? HOLE_SHEET : mat; // E60: a sheet holed where it is hit
+        hole_hit(point, b.dir, dmg, hmat, pc, thin);
+        if (thin <= 0.f)
+            dent_hit(point, normal, b.dir, dmg, mat, pc, false); // E56: any face, any thickness
     }
     if (pc >= 0)
         damage_piece(u16(pc), dmg, b.dir, 1.5f);
@@ -2946,13 +3274,37 @@ void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& 
 
 bool hole_pass(const Fvector& p) { return !S.holes.empty() && hole_contains(p, 0.97f); }
 
+// E61: a round through a triangle it passes whole (a pane of glass: shoot factor 1, the game sends no hit) - the bullets'
+// thread: E59's statics queue it for their update
+void bullet_pass(const SBullet& b, u32 tri, const Fvector& point)
+{
+    if (b.pm_destruct > 0.f)
+        portal_mod_statics::pass_hit(point, b.dir, tri, b.pm_destruct * (b.max_speed > 1.f ? clampr(b.speed / b.max_speed, 0.2f, 1.f) : 1.f));
+}
+
+// E59: a broken pole's, fence piece's, lamp's holes and dents go with it (they would hang in the air)
+void forget_marks(const Fbox& box)
+{
+    const auto in = [&box](const Fvector& c) { return box.contains(c); };
+    S.holes.erase(std::remove_if(S.holes.begin(), S.holes.end(), [&in](const Hole& h) { return h.piece < 0 && in(h.c); }), S.holes.end());
+    S.dents.erase(std::remove_if(S.dents.begin(), S.dents.end(), [&in](const Dent& d) { return d.piece < 0 && in(d.c); }), S.dents.end());
+} // (the shaders' lists are made again each frame)
+
 void explosion(const Fvector& pos, float radius, float hit, float impulse)
 {
     portal_mod_props::explosion(pos, radius, hit, impulse); // E57: the props round it (their own switch)
     portal_mod_trees::explosion(pos, radius, hit, impulse); // E58: the trees round it (the same)
+    portal_mod_statics::explosion(pos, radius, hit, impulse); // E59: the poles, fences and lamps round it (the same)
     if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
         return;
+    {
+        Fvector cc, cn;
+        float cr, cd;
+        if (portal_mod_craters::blast(pos, radius, hit, cc, cn, cr, cd)) // E60: a crater in the ground under it
+            crater_dent(cc, cn, cr, cd);
+    }
     blast_dents(pos, radius, hit); // E56: the faces round it, on any level
+    breach_blast(pos, hit); // E62: a wall at it breached
     if (!S.loaded)
         return;
     const float R = radius;
@@ -3178,6 +3530,8 @@ void update()
         update_body();
         portal_mod_props::update(); // E57
         portal_mod_trees::update(); // E58
+        portal_mod_statics::update(); // E59
+        portal_mod_craters::update(); // E60
         return;
     }
     CTimer t;
@@ -3185,6 +3539,8 @@ void update()
     update_body();
     portal_mod_props::update(); // E57
     portal_mod_trees::update(); // E58
+    portal_mod_statics::update(); // E59
+    portal_mod_craters::update(); // E60
     prof::upd = t.GetElapsed_sec() * 1000.f;
 }
 
@@ -3203,12 +3559,16 @@ void shutdown()
     reset();
     portal_mod_props::reset(); // E57: the props' pieces' bodies go before the physics world too
     portal_mod_trees::reset(); // E58: the fallen trees kept, their trunks' boxes go
+    portal_mod_statics::reset(); // E59: the broken ones kept, their bodies go
+    portal_mod_craters::reset(); // E60: the craters kept (by level), the pool goes with the model
     loop_fx.clear(); // E57: the level's end destroys every particle system itself
 }
 
 void save_game(LPCSTR sav_path)
 {
     portal_mod_trees::save_game(sav_path); // E58: <save>.sav.trees
+    portal_mod_statics::save_game(sav_path); // E59: <save>.sav.statics
+    portal_mod_craters::save_game(sav_path); // E60: <save>.sav.craters
     if (!sav_path || !*sav_path)
         return;
     stash();
@@ -3237,6 +3597,8 @@ void save_game(LPCSTR sav_path)
 void load_game(LPCSTR sav_path)
 {
     portal_mod_trees::load_game(sav_path); // E58
+    portal_mod_statics::load_game(sav_path); // E59
+    portal_mod_craters::load_game(sav_path); // E60
     ++G.gen;
     G.levels.clear();
     portal_mod_props::reset(); // E57: the props come back with the save's objects, their pieces go
@@ -3353,9 +3715,15 @@ Fvector lua_wall_probe(const Fvector& from, const Fvector& dir_in, float range)
     out.x = R.range;
     const CDB::TRI& t = Level().ObjectSpace.GetStaticTris()[R.element];
     const SGameMtl* m = GMLib.GetMaterialByIdx(t.material);
+    const int pc = piece_of_tri(u32(R.element));
+    if (pc < 0 && chip_class(t.material) >= NMAT && is_sheet(u16(t.material))) // E60: a sheet - z 4, y its material's shoot factor
+    {
+        out.z = float(HOLE_SHEET);
+        out.y = m ? m->fShootFactor : -1.f;
+        return out;
+    }
     if (!m || fsimilar(m->fShootFactor, 1.0f, EPS))
         return out;
-    const int pc = piece_of_tri(u32(R.element));
     const u8 cls = pc >= 0 ? S.pieces[pc].mat : chip_class(t.material);
     if (cls >= NMAT)
         return out;
@@ -3516,6 +3884,8 @@ static bool cform_with_sink(const Fvector* verts, size_t nv, const CDB::TRI* tri
     out_v.push_back(Fvector{0.f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.02f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.f, -9000.f, 0.02f});
+    portal_mod_statics::append_cform(out_v, out_t); // E59: the triangles cut between poles, fences, lamps
+    portal_mod_craters::append_pool(out_v, out_t); // E60: the craters' pool, last
     return true;
 }
 
@@ -3525,6 +3895,7 @@ bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* 
     reset();
     load_cfg();
     g_pm_cform_sink = u32(-1);
+    portal_mod_statics::load_level(nv, nt); // E59: its level.pms (made for these nv, nt)
     if (!C.enabled)
         return cform_with_sink(verts, nv, tris, nt, out_v, out_t); // E58
     string_path fn;
@@ -3569,6 +3940,7 @@ bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* 
         if (!cut[i])
             CopyMemory(&out_t[kept++], reinterpret_cast<const u8*>(tris) + i * sizeof(CDB::TRI), sizeof(CDB::TRI));
     out_t.resize(kept);
+    portal_mod_statics::remap_cform(cut); // E59: the poles' triangles after the cut ones move down
     S.tri_base = (u32)out_t.size();
     const u32 vbase = (u32)out_v.size();
     S.vbase = vbase;
@@ -3603,6 +3975,8 @@ bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* 
     out_v.push_back(Fvector{0.f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.02f, -9000.f, 0.f});
     out_v.push_back(Fvector{0.f, -9000.f, 0.02f});
+    portal_mod_statics::append_cform(out_v, out_t); // E59: the triangles cut between poles, fences, lamps
+    portal_mod_craters::append_pool(out_v, out_t); // E60: the craters' pool, last
     S.app_v.clear();
     S.app_v.shrink_to_fit();
     S.loaded = true; // (app_t stays: E54d's rebuild puts the pieces' triangles back when a save is loaded on this level)
@@ -3614,6 +3988,7 @@ bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* 
 void portal_mod_destruct_ib(bool fast, u32 ib, u16* data, u32 count)
 {
     using namespace portal_mod_destruct;
+    portal_mod_statics::on_ib(fast, ib, data, count); // E59: the poles' triangles' indices, as the level has them
     if (!S.loaded)
         return;
     auto it = S.ib_cuts.find(ib_key(fast, ib));
