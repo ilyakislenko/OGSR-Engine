@@ -28,6 +28,55 @@ static class cl_pm_holes final : public R_constant_setup
     }
 } binder_pm_holes;
 
+// portal-mod E56: dents in any face (xrGame/portal_mod_destruct.cpp fills them every frame in world space, the nearest
+// first: centre & radius, normal & the edge's seed, tangent & the dark band's width; portal_mod_dents_count of them). The
+// shaders get them in view space as pm_dents_a/b/c, the one after the last zero - the end (r4.cpp injects the clip).
+Fvector4 portal_mod_dents[3][48]{};
+u32 portal_mod_dents_count{};
+template <int K>
+class cl_pm_dents final : public R_constant_setup
+{
+    void setup(CBackend& cmd_list, R_constant* C) override
+    {
+        const u32 n = _min(portal_mod_dents_count, 48u);
+        for (u32 i = 0; i < n; ++i)
+        {
+            const Fvector4& v = portal_mod_dents[K][i];
+            Fvector o;
+            if constexpr (K == 0)
+                cmd_list.xforms.m_v.transform_tiny(o, Fvector{v.x, v.y, v.z});
+            else
+                cmd_list.xforms.m_v.transform_dir(o, Fvector{v.x, v.y, v.z});
+            cmd_list.set_ca(C, i, o.x, o.y, o.z, v.w);
+        }
+        if (n < 48)
+            cmd_list.set_ca(C, n, 0.f, 0.f, 0.f, 0.f);
+    }
+};
+static cl_pm_dents<0> binder_pm_dents_a;
+static cl_pm_dents<1> binder_pm_dents_b;
+static cl_pm_dents<2> binder_pm_dents_c;
+// the groups of 8 slots (spatially close dents) and a sphere round each: a pixel outside it skips the group's dents
+Fvector4 portal_mod_dents_groups[6]{};
+u32 portal_mod_dents_groups_count{};
+class cl_pm_dents_g final : public R_constant_setup
+{
+    void setup(CBackend& cmd_list, R_constant* C) override
+    {
+        const u32 n = _min(portal_mod_dents_groups_count, 6u);
+        for (u32 i = 0; i < n; ++i)
+        {
+            const Fvector4& v = portal_mod_dents_groups[i];
+            Fvector o;
+            cmd_list.xforms.m_v.transform_tiny(o, Fvector{v.x, v.y, v.z});
+            cmd_list.set_ca(C, i, o.x, o.y, o.z, v.w);
+        }
+        if (n < 6)
+            cmd_list.set_ca(C, n, 0.f, 0.f, 0.f, 0.f);
+    }
+};
+static cl_pm_dents_g binder_pm_dents_g;
+
 // -- capture R_constant !!!
 #define BIND_DECLARE(xf) \
     static class cl_xform_##xf final : public R_constant_setup_cap \
@@ -924,6 +973,10 @@ void CBlender_Compile::SetMapping() const
 
     r_Constant("dev_mProject", &binder_mProject);
     r_Constant("pm_holes", &binder_pm_holes); // portal-mod E54b
+    r_Constant("pm_dents_a", &binder_pm_dents_a); // portal-mod E56
+    r_Constant("pm_dents_b", &binder_pm_dents_b);
+    r_Constant("pm_dents_c", &binder_pm_dents_c);
+    r_Constant("pm_dents_g", &binder_pm_dents_g);
 
     // system.ltx common
     for (const auto& [name, s] : DEV->v_constant_setup)

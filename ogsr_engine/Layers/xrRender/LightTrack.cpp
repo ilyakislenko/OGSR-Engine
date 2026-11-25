@@ -152,7 +152,8 @@ void CROS_impl::update(IRenderable* O)
     const vis_data& vis = O->renderable.visual->getVisData();
     Fvector position;
     O->renderable.xform.transform_tiny(position, vis.sphere.P);
-    position.y += .3f * vis.sphere.R;
+    if (O->renderable.pROS_Allowed != 3) // portal-mod E56: a dent's bowl - traced from its own point, out in front of the wall
+        position.y += .3f * vis.sphere.R;
     Fvector direction;
     direction.random_dir();
 

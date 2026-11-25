@@ -1906,6 +1906,7 @@ void CLevel::script_register(lua_State* L)
             def("destruct_piece_pos", &portal_mod_destruct::lua_piece_pos), def("destruct_piece_state", &portal_mod_destruct::lua_piece_state),
             def("destruct_chips", &portal_mod_destruct::lua_chips),
             def("destruct_hole_at", &portal_mod_destruct::lua_hole_at), // portal-mod E54b
+            def("destruct_dent_at", &portal_mod_destruct::lua_dent_at), // portal-mod E56: the radius of a dent there
             def("destruct_wall_probe", &portal_mod_destruct::lua_wall_probe), // portal-mod E54b
             def("pm_feature_set", &pm_feature_set), def("pm_feature", &pm_feature), def("pm_use_holder", &pm_use_holder), // portal-mod E55
             // portal-mod E53: the replay for filming (portal_mod_replay.cpp)

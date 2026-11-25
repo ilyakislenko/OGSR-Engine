@@ -645,6 +645,77 @@ static const char* PM_HOLES_HLSL =
     "    col.rgb *= lerp(0.25, 1.0, rim * rim);\n"
     "}\n\n";
 
+static const char* PM_DENTS_HLSL =
+    "// portal-mod E56: dents in any face (xrGame/portal_mod_destruct.cpp): view space, the nearest first, radius 0 - the end.\n"
+    "// a: the centre on the face, radius; b: the face's normal, the edge's seed; c: a tangent, the band round it (x radius:\n"
+    "// > 0 a round's dust, lighter; < 0 a blast's soot). The level's face is cut away inside the ragged edge (the game draws a\n"
+    "// bowl behind it), a thin dark lip at the edge.\n"
+    "uniform float4 pm_dents_a[48];\n"
+    "uniform float4 pm_dents_b[48];\n"
+    "uniform float4 pm_dents_c[48];\n"
+    "// slot g*8.. g*8+7: group g of spatially close dents (a zero radius ends the group); pm_dents_g: a sphere round each\n"
+    "// group (view space; a zero radius - no more groups)\n"
+    "uniform float4 pm_dents_g[6];\n"
+    "void pm_dent_clip(float3 pmP, float3 pmN, inout float4 col)\n"
+    "{\n"
+    "    float3 ax = float3(m_W._11, m_W._21, m_W._31);\n"
+    "    float s2 = dot(ax, ax);\n"
+    "    bool level_geom = (abs(m_W._14) + abs(m_W._24) + abs(m_W._34)) == 0.0 || abs(s2 - 1.0002) < 0.00004;\n"
+    "    if (!level_geom)\n"
+    "    {\n"
+    "        // a dent's bowl (its j axis 1.0008 x its i): fresh broken stone, lighter at the top, darker the deeper as the\n"
+    "        // light hardly gets in (the model's z: 0 at the face, -0.45 at the bottom)\n"
+    "        float3 aj = float3(m_W._12, m_W._22, m_W._32);\n"
+    "        if (abs(dot(aj, aj) / max(s2, 1e-10) - 1.0016) < 0.0003)\n"
+    "        {\n"
+    "            float3 K = float3(m_WV._13, m_WV._23, m_WV._33);\n"
+    "            float3 O = float3(m_WV._14, m_WV._24, m_WV._34);\n"
+    "            float ao = saturate(1.0 + dot(pmP - O, K) / max(dot(K, K), 1e-10) / 0.45);\n"
+    "            col.rgb *= lerp(0.45, 1.1, ao);\n"
+    "        }\n"
+    "        return;\n"
+    "    }\n"
+    "    float shade = 1.0;\n"
+    "    [loop] for (int g = 0; g < 6; ++g)\n"
+    "    {\n"
+    "        float4 G = pm_dents_g[g];\n"
+    "        if (G.w <= 0.0)\n"
+    "            break;\n"
+    "        float3 dg = pmP - G.xyz;\n"
+    "        if (dot(dg, dg) > G.w * G.w)\n"
+    "            continue;\n"
+    "        [loop] for (int j = 0; j < 8; ++j)\n"
+    "        {\n"
+    "            int i = g * 8 + j;\n"
+    "            float4 a = pm_dents_a[i];\n"
+    "            if (a.w <= 0.0)\n"
+    "                break;\n"
+    "            float4 c = pm_dents_c[i];\n"
+    "            float3 d = pmP - a.xyz;\n"
+    "            float dd = dot(d, d);\n"
+    "            float reach = a.w * (1.32 + abs(c.w)) + 0.01;\n"
+    "            if (dd > reach * reach)\n"
+    "                continue;\n"
+    "            float4 b = pm_dents_b[i];\n"
+    "            float h = dot(d, b.xyz);\n"
+    "            if (abs(h) > 0.03 + 0.25 * a.w || dot(pmN, b.xyz) < 0.35)\n"
+    "                continue;\n"
+    "            float3 bt = cross(b.xyz, c.xyz);\n"
+    "            float th = atan2(dot(d, bt), dot(d, c.xyz));\n"
+    "            float s = b.w;\n"
+    "            float edge = a.w * (1.0 + 0.09 * sin(3.0 * th + s) + 0.08 * sin(7.0 * th + 2.3 * s) + 0.06 * sin(13.0 * th + 3.7 * s)\n"
+    "                                + 0.04 * sin(23.0 * th + 5.1 * s));\n"
+    "            float rr = sqrt(max(dd - h * h, 0.0));\n"
+    "            clip(rr - edge);\n"
+    "            // a thin dark lip at the edge; round it a round's fresh dust (c.w > 0, lighter) or a blast's soot (c.w < 0)\n"
+    "            float t = saturate((rr - edge) / (abs(c.w) * a.w + 0.004));\n"
+    "            float lip = saturate((rr - edge) / (0.1 * a.w + 0.003));\n"
+    "            shade *= (c.w > 0.0 ? lerp(1.28, 1.0, t) : lerp(0.3, 1.0, t * t)) * lerp(0.4, 1.0, lip);\n"
+    "        }\n"
+    "    }\n"
+    "    col.rgb = saturate(col.rgb * shade);\n"
+    "}\n\n";
+
 // pack_gbuffer gets the clip at its start, the helper before it
 static void portal_mod_holes_shader(xr_string& s)
 {
@@ -656,7 +727,8 @@ static void portal_mod_holes_shader(xr_string& s)
         Msg("! [portal-mod E54b] common_functions.h has no pack_gbuffer(norm, pos, col): wall holes are not drawn");
         return;
     }
-    s.insert(brace + 1, "\n    pm_hole_clip(pos.xyz, col);\n");
+    s.insert(brace + 1, "\n    pm_hole_clip(pos.xyz, col);\n#ifndef PM_NO_DENTS\n    pm_dent_clip(pos.xyz, norm.xyz, col); // portal-mod E56\n#endif\n");
+    s.insert(at, PM_DENTS_HLSL); // portal-mod E56: after the holes' helper (m_W)
     s.insert(at, PM_HOLES_HLSL);
 }
 
@@ -850,6 +922,10 @@ HRESULT CRender::shader_compile(LPCSTR name, DWORD const* pSrcData, UINT SrcData
     
     if (CApplication::CheckCsCopMode())
         defines.emplace_back("USE_CS_COP_LMAP", "1");
+
+    // portal-mod E56: no dents in the grass, particles, far LODs or the HUD (the most pixels, none of them a wall's)
+    if (strstr(name, "grass") || strstr(name, "particle") || strstr(name, "hud") || !xr_strcmp(name, "lod"))
+        defines.emplace_back("PM_NO_DENTS", "1");
 
     // finish
     defines.emplace_back(nullptr, nullptr);

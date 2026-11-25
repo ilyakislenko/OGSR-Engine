@@ -276,6 +276,8 @@ int portal_mod_sun_cascade(u32 context_id)
             return i;
     return -1;
 }
+// portal-mod E56: a render context drawing a shadow map, any light's (xrGame/portal_mod_destruct.cpp: a dent's bowl casts none)
+bool portal_mod_ctx_smap(u32 context_id) { return RImplementation.get_context(context_id).phase == CRender::PHASE_SMAP; }
 void portal_mod_render_queue_ib(bool fast, u32 ib, const u16* data, u32 count) { portal_mod_ib_jobs.push_back(PortalModIbJob{fast, ib, xr_vector<u16>(data, data + count)}); }
 
 void CRender::LoadBuffers(CStreamReader* base_fs, BOOL _alternative)

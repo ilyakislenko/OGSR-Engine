@@ -5,6 +5,8 @@
 // into rubble; a structural solver (load paths to the ground, moments on horizontal bonds) breaks overloaded bonds;
 // what has lost its support falls as rigid bodies (islands of pieces bonded together) which break up and damage what
 // they hit. Big calibres chip real fragments off stone, concrete, brick and wood anywhere on the level.
+// E56: rounds and blasts dent any face of stone, concrete, brick and wood (the face cut away by the shaders inside a
+// ragged edge, a bowl behind it), the damage adding up at a spot; kept with the game like the holes.
 #pragma once
 
 struct SBullet;
@@ -30,6 +32,7 @@ Fvector lua_piece_pos(int id);
 int lua_piece_state(int id);
 void lua_chips(const Fvector& pos, const Fvector& normal, float damage);
 float lua_hole_at(const Fvector& pos); // E54b
+float lua_dent_at(const Fvector& pos); // E56: the radius of the biggest dent there (0: none)
 Fvector lua_wall_probe(const Fvector& from, const Fvector& dir, float range); // E54b: distance, thickness, class
 void lua_profile(bool on); // E54e: a "PROFILE" line each second - where the frame's time goes (and every frame over 40 ms)
 void lua_crush_immune(int id, bool on); // E54e: falling pieces never hit this object (Kruglov)

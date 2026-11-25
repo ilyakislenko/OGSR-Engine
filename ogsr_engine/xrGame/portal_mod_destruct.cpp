@@ -51,6 +51,13 @@ extern float g_pm_frame_ms[4]; // the last frame: the game's update, the render,
 extern BOOL g_pm_stat_gather; // the engine's stat timers on without the stats on screen
 void portal_mod_render_stats(u32* out); // main calls, verts, models' calls, level calls, 3 sun cascades' calls
 int portal_mod_sun_cascade(u32 context_id); // which sun cascade a render context draws (-1: none)
+// portal-mod E56: dents (Layers/xrRender/Blender_Recorder_StandartBinding.cpp, xrRenderPC_R4/r4_loader.cpp)
+extern Fvector4 portal_mod_dents[3][48]; // world space, the nearest first: centre & radius, normal & seed, tangent & band
+extern u32 portal_mod_dents_count; // how many of them the shaders cut
+extern Fvector4 portal_mod_dents_groups[6]; // world space: a sphere round each group of 8 slots (spatially close dents)
+extern u32 portal_mod_dents_groups_count;
+bool portal_mod_ctx_smap(u32 context_id); // a render context drawing a shadow map
+extern bool g_r_dsgraph_dup_ok; // the render graph takes a visual once a pass but while this is up (r__dsgraph_build.cpp)
 
 namespace portal_mod_destruct
 {
@@ -67,6 +74,9 @@ constexpr int NMAT = 3; // concrete, brick, wood (tools/destruct_build.py MATERI
 LPCSTR const MAT_KEY[NMAT] = {"concrete", "brick", "wood"};
 LPCSTR const CHIP_SIZE[4] = {"s", "m", "l", "x"};
 const float CHIP_R[4] = {0.025f, 0.06f, 0.16f, 0.3f}; // the chip models' radius about their centre
+constexpr int DENT_VARS = 6; // E56: a dent's bowl models per material (tools/destruct_build.py write_dents): 0-3 a round's, 4-5 a blast's
+constexpr int DENT_DRAW_MAX = 48; // E56: the shaders' arrays (pm_dents_a/b/c)
+constexpr float DENT_RIM = 1.32f, DENT_DEPTH = 0.45f; // E56: the bowl's rim and depth in its model, x the dent's radius
 
 struct Cfg
 {
@@ -100,6 +110,9 @@ struct Cfg
     float chip_k{1.f}; // the number of chips per hit
     float chip_life{14.f}, rubble_life{40.f}; // s lying before they sink
     int max_chips{600};
+    // E56: a chip smaller than chip_shadow_min (m, its model's sphere) casts no shadow; one farther than chip_draw_dist
+    // (m; the big ones twice that) is not drawn
+    float chip_shadow_min{0.1f}, chip_draw_dist{45.f};
     int max_fx{6}; // particle systems started per frame at most
     // E54b holes: a round of at least hole_min_dmg into a wall no thicker than hole_max_thick (m) adds up with the
     // rounds before it at the spot; past hole_need (per m of the wall's thickness, by material) a hole opens, its
@@ -108,6 +121,23 @@ struct Cfg
     float hole_need[NMAT]{260.f, 160.f, 70.f};
     float hole_r0{0.06f}, hole_r_k{0.0028f}, hole_r_max{0.33f};
     int max_holes{64};
+    // E56 dents: a round of at least dent_min_dmg into stone, concrete, brick or wood anywhere (any thickness, one face
+    // or two) adds up at the spot - with the rounds before it within the dent's radius + dent_merge on the same face;
+    // past dent_need it is a dent: the face cut away inside a ragged dark edge, a bowl behind it. Its radius dent_r0 x
+    // dent_scale (by material) x sqrt(damage / need), up to dent_r_max (a blast's dent_r_max_blast), as small as the face
+    // round it holds; as deep as dent_depth x the radius, at most 0.6 of the wall's thickness. max_dents kept a level (the
+    // oldest goes), the dent_draw nearest the camera within dent_draw_dist m drawn, casting no shadows
+    bool dents{true};
+    float dent_min_dmg{2.f}, dent_need{5.f}, dent_merge{0.1f};
+    float dent_r0{0.05f}, dent_scale[NMAT]{1.f, 1.15f, 1.3f}, dent_r_max{0.32f}, dent_r_max_blast{0.75f}, dent_depth{0.45f};
+    float dent_band{0.5f}, dent_band_blast{1.2f}; // round its edge, x its radius: a round's light dust, a blast's soot
+    int max_dents{400}, dent_draw{48};
+    float dent_draw_dist{70.f};
+    // E56: a blast dents the faces round it on any level - blast_dent_rays rays out to blast_r x blast_dent_reach (at most
+    // blast_dent_range m); a face hit gets a dent at its point nearest the blast, damage blast x blast_dent_k x
+    // (1 - d / range)^2, and the nearest blast_dent_chips of them throw chunks
+    int blast_dent_rays{26}, blast_dent_chips{6};
+    float blast_dent_reach{0.5f}, blast_dent_range{5.f}, blast_dent_k{300.f};
     xr_vector<shared_str> fx_destroy[NMAT], fx_impact, fx_heavy_hit, snd_destroy, snd_impact;
     shared_str snd_collapse;
     // E54e crush: a falling body moving faster than crush_v (m/s, at the spot) that reaches a living creature hits it -
@@ -258,14 +288,78 @@ struct ChipModel : public ISpatial, public IRenderable
     IRenderable* dcast_Renderable() override { return this; }
     void renderable_Render(u32 context_id, IRenderable* root) override
     {
-        if (C.shadow_min_r > 0.f && renderable.visual) // E54e: chips cast no shadow in the far sun cascades
+        if (!renderable.visual)
+            return;
+        const float R = renderable.visual->getVisData().sphere.R;
+        if (R < C.chip_shadow_min && portal_mod_ctx_smap(context_id)) // E56: a small chip's shadow is a dot
+            return;
+        if (C.shadow_min_r > 0.f) // E54e: chips cast no shadow in the far sun cascades
         {
             const int cas = portal_mod_sun_cascade(context_id);
-            if (cas >= 1 && renderable.visual->getVisData().sphere.R < C.shadow_min_r * cas)
+            if (cas >= 1 && R < C.shadow_min_r * cas)
                 return;
         }
+        const float reach = C.chip_draw_dist * (R >= C.chip_shadow_min ? 2.f : 1.f); // (`far` is a Windows macro)
+        const float far2 = reach * reach;
+        const Fvector& cam = Device.vCameraPosition;
+        g_r_dsgraph_dup_ok = true; // E56: one model at many places this pass (else only the first chip of a model is drawn)
         for (Fmatrix& m : xf)
-            ::Render->add_Visual(context_id, this, renderable.visual, m);
+            if (m.c.distance_to_sqr(cam) < far2)
+                ::Render->add_Visual(context_id, this, renderable.visual, m);
+        g_r_dsgraph_dup_ok = false;
+    }
+    BOOL renderable_ShadowReceive() override { return TRUE; }
+};
+
+// E56: a dent's bowl behind the face cut away - one of the shared models (S.dent_models own them), drawn at the dent with
+// its own light (traced from out in front of the face); no shadows: it is inside the wall
+struct DentVis : public ISpatial, public IRenderable
+{
+    bool in_space{};
+    u32 dent{}; // the id of the dent it shows (0: none)
+    DentVis() : ISpatial(g_SpatialSpace)
+    {
+        renderable.visual = nullptr;
+        renderable.pROS_Allowed = 3; // its light traced from its model's centre, out in front of the wall (LightTrack.cpp, E56)
+        renderable.xform.identity();
+        spatial.type = STYPE_RENDERABLE | PORTAL_MOD_STYPE_REPLAY;
+    }
+    ~DentVis() override
+    {
+        hide();
+        renderable.visual = nullptr; // not its own
+    }
+    void hide()
+    {
+        if (in_space)
+        {
+            spatial_unregister();
+            in_space = false;
+        }
+        dent = 0;
+    }
+    // the sphere for culling and the sector: out in front of the face (the room it is seen from), over the whole bowl
+    void place(IRenderVisual* v, const Fmatrix& m, const Fvector& front, float R)
+    {
+        renderable.visual = v;
+        renderable.xform.set(m);
+        spatial.sphere.set(front, R);
+        if (!in_space)
+        {
+            spatial_register();
+            in_space = true;
+        }
+        else
+            spatial_move();
+    }
+    IRenderable* dcast_Renderable() override { return this; }
+    void renderable_Render(u32 context_id, IRenderable* root) override
+    {
+        if (!renderable.visual || portal_mod_ctx_smap(context_id))
+            return;
+        g_r_dsgraph_dup_ok = true; // the bowls share their models: another dent's may have gone this pass already
+        ::Render->add_Visual(context_id, this, renderable.visual, renderable.xform);
+        g_r_dsgraph_dup_ok = false;
     }
     BOOL renderable_ShadowReceive() override { return TRUE; }
 };
@@ -341,6 +435,20 @@ struct Hole
     u32 time{};
 };
 
+// E56: a spot on any face of stone, concrete, brick or wood taking rounds (or a blast); a dent once their damage passes
+// dent_need - the shaders cut the face away inside its ragged edge, a bowl is drawn behind it
+struct Dent
+{
+    Fvector c{}, n{}, t{}; // the centre on the face, the face's normal (towards where the hits came from), a tangent
+    float r{}, depth{}, dmg{}, thick{}, seed{}; // r 0: not yet a dent; thick: the wall behind it (1: 1 m or more)
+    float cap{-1.f}; // the radius the face round it holds (-1: not found short yet), and checked: up to which it was seen to
+    float checked{};
+    int piece{-1}; // on a building's standing piece (the dent goes with it)
+    u8 mat{}, var{};
+    bool blast{};
+    u32 time{}, id{};
+};
+
 struct IbCopy
 {
     bool fast;
@@ -369,6 +477,11 @@ struct State
     xr_vector<u8> mtl_class; // GMLib index -> chip class (255: none)
     xr_vector<struct Hole> holes; // E54b
     u32 holes_open{};
+    xr_vector<Dent> dents; // E56
+    xr_vector<DentVis*> dent_vis; // E56: the bowls drawn (DENT_DRAW_MAX at most)
+    xr_vector<IRenderVisual*> dent_models; // E56: [mat][variant]
+    bool dent_models_made{};
+    u32 dent_ids{}, dents_drawn{};
     u32 fx_frame{}, fx_count{};
     u32 solves{}, broken{}, toppled{};
     u32 restacked{}; // E54d: sideways bonds between pieces one above the other, counted as stacking
@@ -466,6 +579,8 @@ void load_cfg()
     C.chip_life = cfg_f(s, "chip_life", C.chip_life);
     C.rubble_life = cfg_f(s, "rubble_life", C.rubble_life);
     C.max_chips = (int)cfg_f(s, "max_chips", (float)C.max_chips);
+    C.chip_shadow_min = cfg_f(s, "chip_shadow_min", C.chip_shadow_min);
+    C.chip_draw_dist = cfg_f(s, "chip_draw_dist", C.chip_draw_dist);
     C.max_fx = (int)cfg_f(s, "max_fx_per_frame", (float)C.max_fx);
     C.hole_min_dmg = cfg_f(s, "hole_min_damage", C.hole_min_dmg);
     C.hole_max_thick = cfg_f(s, "hole_max_thickness", C.hole_max_thick);
@@ -475,6 +590,26 @@ void load_cfg()
     C.hole_r_k = cfg_f(s, "hole_radius_k", C.hole_r_k);
     C.hole_r_max = cfg_f(s, "hole_radius_max", C.hole_r_max);
     C.max_holes = (int)cfg_f(s, "max_holes", (float)C.max_holes);
+    C.dents = !pSettings->line_exist(s, "dents") || pSettings->r_bool(s, "dents"); // E56
+    C.dent_min_dmg = cfg_f(s, "dent_min_damage", C.dent_min_dmg);
+    C.dent_need = _max(0.1f, cfg_f(s, "dent_need", C.dent_need));
+    C.dent_merge = cfg_f(s, "dent_merge", C.dent_merge);
+    C.dent_r0 = cfg_f(s, "dent_radius_min", C.dent_r0);
+    for (int m = 0; m < NMAT; ++m)
+        C.dent_scale[m] = cfg_f(s, (xr_string("dent_scale_") + MAT_KEY[m]).c_str(), C.dent_scale[m]);
+    C.dent_r_max = cfg_f(s, "dent_radius_max", C.dent_r_max);
+    C.dent_r_max_blast = cfg_f(s, "dent_radius_max_blast", C.dent_r_max_blast);
+    C.dent_depth = cfg_f(s, "dent_depth", C.dent_depth);
+    C.dent_band = cfg_f(s, "dent_band", C.dent_band);
+    C.dent_band_blast = cfg_f(s, "dent_band_blast", C.dent_band_blast);
+    C.max_dents = (int)cfg_f(s, "max_dents", (float)C.max_dents);
+    C.dent_draw = clampr((int)cfg_f(s, "dent_draw", (float)C.dent_draw), 0, DENT_DRAW_MAX);
+    C.dent_draw_dist = cfg_f(s, "dent_draw_dist", C.dent_draw_dist);
+    C.blast_dent_rays = (int)cfg_f(s, "blast_dent_rays", (float)C.blast_dent_rays);
+    C.blast_dent_chips = (int)cfg_f(s, "blast_dent_chips", (float)C.blast_dent_chips);
+    C.blast_dent_reach = cfg_f(s, "blast_dent_reach", C.blast_dent_reach);
+    C.blast_dent_range = cfg_f(s, "blast_dent_range", C.blast_dent_range);
+    C.blast_dent_k = cfg_f(s, "blast_dent_k", C.blast_dent_k);
     cfg_fx(s, "fx_destroy_concrete", C.fx_destroy[0], "vehiclefx\\impact_concrete_03");
     cfg_fx(s, "fx_destroy_brick", C.fx_destroy[1], "explosions\\expl_wall_00");
     cfg_fx(s, "fx_destroy_wood", C.fx_destroy[2], "destroy_fx\\destroy_wood_00");
@@ -804,19 +939,29 @@ void chips_at(const Fvector& point, const Fvector& normal, const Fvector& dir, f
     if (n.square_magnitude() < EPS)
         n.invert(dir);
     n.normalize_safe();
-    const int count = iFloor(_min(14.f, (1.f + dmg * 0.35f) * C.chip_k));
+    // E56: more and bigger - a pistol's round (1) two crumbs, an assault rifle's (3-5) four or five with a fragment or
+    // two, from 9 a big one, from 25 two, from 60 (a blast's) a chunk
+    const int count = iFloor(_min(18.f, (2.f + dmg * 0.7f) * C.chip_k));
     for (int i = 0; i < count; ++i)
     {
-        const int size = dmg >= 25.f && i < 2 ? 2 : (dmg >= 9.f && i < 4 ? 1 : 0);
+        int size = 0;
+        if (dmg >= 60.f)
+            size = i < 1 ? 3 : (i < 3 ? 2 : (i < 7 ? 1 : 0));
+        else if (dmg >= 25.f)
+            size = i < 2 ? 2 : (i < 6 ? 1 : 0);
+        else if (dmg >= 9.f)
+            size = i < 1 ? 2 : (i < 4 ? 1 : 0);
+        else if (dmg >= 3.f)
+            size = i < (dmg >= 5.f ? 2 : 1) ? 1 : 0;
         Fvector d;
         d.random_dir(n, deg2rad(70.f));
         Fvector v;
-        v.mul(d, ::Random.randF(2.f, 7.f) * (size == 2 ? 0.5f : 1.f));
+        v.mul(d, ::Random.randF(2.f, 7.f) * (size == 3 ? 0.35f : size == 2 ? 0.5f : 1.f));
         Fvector p;
         p.mad(point, n, CHIP_R[size] + 0.02f);
         add_chip(mat, size, p, v, C.chip_life * (size >= 1 ? 1.6f : 1.f));
     }
-    if (dmg >= 9.f)
+    if (dmg >= 3.f) // E56: from an assault rifle's round on (was 9)
         play_fx(C.fx_heavy_hit, point, n);
 }
 
@@ -883,6 +1028,9 @@ void hole_hit(const Fvector& point, const Fvector& dir, float dmg, u8 mat, int p
     if (opened)
     {
         ++S.holes_open;
+        const Hole hh = *h; // E56: the dents inside it go (it is through the wall there)
+        S.dents.erase(std::remove_if(S.dents.begin(), S.dents.end(), [&hh](const Dent& d) { return d.piece == hh.piece && d.c.distance_to(hh.c) < hh.r; }),
+                      S.dents.end());
         // the far side bursts out
         Fvector exit;
         exit.mad(h->c, h->dir, half);
@@ -915,6 +1063,385 @@ void update_holes()
         else
             portal_mod_holes[k].set(0.f, 0.f, 0.f, 0.f);
     }
+}
+
+// ------------------------------------------------------------------------------------------------------------- dents (E56)
+void make_dent_models()
+{
+    if (S.dent_models_made)
+        return;
+    S.dent_models_made = true;
+    for (int m = 0; m < NMAT; ++m)
+        for (int v = 0; v < DENT_VARS; ++v)
+        {
+            string_path n;
+            xr_sprintf(n, "portal_mod\\destruct\\dents\\%s_%d", MAT_KEY[m], v);
+            IRenderVisual* vis = ::Render->model_Create(n);
+            if (!vis)
+                Msg("! [destruct] no dent model %s: such dents are not drawn", n);
+            S.dent_models.push_back(vis);
+        }
+}
+
+// the bowl reaching out to rho all round is hidden behind the face or what stands on it: 8 ways out along the face - a
+// ray 2 cm before it meets something first (a floor, a wall across: an inside corner, the bowl goes on behind it), or 5 cm
+// out from the face at rho a ray finds the same face behind (at an outside edge it does not: the bowl would show)
+bool dent_fits(const Fvector& c, const Fvector& n, const Fvector& t, float rho)
+{
+    CDB::TRI* T = Level().ObjectSpace.GetStaticTris();
+    Fvector* V = Level().ObjectSpace.GetStaticVerts();
+    Fvector b, back;
+    b.crossproduct(n, t);
+    back.invert(n);
+    collide::rq_result R;
+    for (int k = 0; k < 8; ++k)
+    {
+        const float a = float(k) * PI_DIV_4;
+        Fvector u, s0;
+        u.set(0.f, 0.f, 0.f).mad(t, _cos(a)).mad(b, _sin(a));
+        s0.mad(c, n, 0.02f);
+        if (Level().ObjectSpace.RayPick(s0, u, rho, collide::rqtStatic, R, nullptr) && R.element >= 0)
+            continue; // an inside corner that way
+        Fvector q;
+        q.mad(c, u, rho).mad(n, 0.05f);
+        if (!Level().ObjectSpace.RayPick(q, back, 0.1f, collide::rqtStatic, R, nullptr) || R.element < 0 || _abs(R.range - 0.05f) > 0.02f)
+            return false;
+        const CDB::TRI& tr = T[R.element];
+        Fvector fn;
+        fn.mknormal(V[tr.verts[0]], V[tr.verts[1]], V[tr.verts[2]]);
+        if (_abs(fn.dotproduct(n)) < 0.9f)
+            return false;
+    }
+    return true;
+}
+
+// the radius it may have, up to `want`: as big as the face round it holds (at a corner or an edge it stays smaller)
+float dent_fit(Dent& d, float want)
+{
+    if (d.cap >= 0.f)
+        return _min(want, d.cap);
+    if (want <= d.checked)
+        return want;
+    for (float r = want; r >= 0.025f; r *= 0.8f)
+        if (dent_fits(d.c, d.n, d.t, r * DENT_RIM))
+        {
+            if (r < want)
+                d.cap = r;
+            else
+                d.checked = want;
+            return r;
+        }
+    d.cap = 0.f;
+    return 0.f;
+}
+
+void dent_grow(Dent& d)
+{
+    if (d.dmg < C.dent_need)
+        return;
+    const float want = _min(d.blast ? C.dent_r_max_blast : C.dent_r_max, C.dent_r0 * C.dent_scale[d.mat] * _sqrt(d.dmg / C.dent_need));
+    if (want <= d.r + 0.002f)
+        return;
+    const float r = dent_fit(d, want);
+    if (r <= d.r)
+        return;
+    d.r = r;
+    d.depth = _max(0.012f, _min(C.dent_depth * r, 0.6f * d.thick));
+}
+
+// a round (or a blast) of `dmg` on a face at `point` coming along `dir`: added up at the spot, a dent past dent_need
+void dent_hit(const Fvector& point, const Fvector& normal, const Fvector& dir, float dmg, u8 mat, int pc, bool blast)
+{
+    if (!C.dents || mat >= NMAT || dmg < (blast ? C.dent_need : C.dent_min_dmg) || !g_pGameLevel)
+        return;
+    if (pc >= 0 && (pc >= (int)S.pieces.size() || S.pieces[pc].state != ST_INTACT))
+        return;
+    if (hole_contains(point, 1.f))
+        return; // an open hole there: through the wall
+    Fvector n = normal;
+    if (n.square_magnitude() < EPS)
+        n.invert(dir);
+    n.normalize_safe();
+    if (n.dotproduct(dir) > 0.f)
+        n.invert(); // the face it came at
+    Dent* d = nullptr;
+    float best = flt_max;
+    for (Dent& o : S.dents)
+    {
+        if (o.piece != pc || o.n.dotproduct(n) < 0.7f)
+            continue;
+        Fvector v;
+        v.sub(point, o.c);
+        const float h = v.dotproduct(o.n);
+        if (_abs(h) > 0.05f)
+            continue;
+        const float rr = _sqrt(_max(v.square_magnitude() - h * h, 0.f));
+        const float reach = _max(o.r, 0.04f) * (blast ? DENT_RIM : 1.f) + C.dent_merge;
+        if (rr < reach && rr < best)
+        {
+            best = rr;
+            d = &o;
+        }
+    }
+    if (!d)
+    {
+        if ((int)S.dents.size() >= _max(C.max_dents, 1))
+        {
+            u32 oldest = 0;
+            for (u32 i = 1; i < S.dents.size(); ++i)
+                if (S.dents[i].time < S.dents[oldest].time)
+                    oldest = i;
+            S.dents.erase(S.dents.begin() + oldest);
+        }
+        Dent nd;
+        nd.c = point;
+        nd.n = n;
+        Fvector up;
+        Fvector::generate_orthonormal_basis_normalized(nd.n, up, nd.t);
+        nd.seed = ::Random.randF(0.f, PI_MUL_2);
+        nd.mat = mat;
+        nd.piece = pc;
+        nd.blast = blast;
+        nd.var = u8(blast ? 4 + ::Random.randI(2) : ::Random.randI(4));
+        nd.id = ++S.dent_ids;
+        // the wall behind it: the bowl goes no deeper than 0.6 of it (a ray on from just inside; a face alone - 1 m)
+        collide::rq_result R;
+        Fvector p0, back;
+        back.invert(n);
+        p0.mad(point, back, 0.012f);
+        nd.thick = Level().ObjectSpace.RayPick(p0, back, 1.f, collide::rqtStatic, R, nullptr) && R.element >= 0 ? R.range + 0.012f : 1.f;
+        S.dents.push_back(nd);
+        d = &S.dents.back();
+    }
+    d->time = Device.dwTimeGlobal;
+    d->dmg += dmg;
+    if (blast && !d->blast)
+    {
+        d->blast = true;
+        d->var = u8(4 + ::Random.randI(2));
+    }
+    dent_grow(*d);
+}
+
+// a blast on any level: the faces round it get a dent each at their point nearest it, the nearest few throw chunks
+void blast_dents(const Fvector& pos, float radius, float hit)
+{
+    if (!C.dents || C.blast_dent_rays <= 0 || hit <= 0.f || !g_pGameLevel)
+        return;
+    const float range = _min(radius * C.blast_dent_reach, C.blast_dent_range);
+    if (range < 0.2f)
+        return;
+    CDB::TRI* T = Level().ObjectSpace.GetStaticTris();
+    Fvector* V = Level().ObjectSpace.GetStaticVerts();
+    struct Spot
+    {
+        Fvector p, n;
+        float d;
+        u8 mat;
+        int pc;
+    };
+    xr_vector<Spot> spots;
+    collide::rq_result R;
+    const int N = C.blast_dent_rays;
+    for (int i = 0; i < N; ++i)
+    {
+        // evenly over the sphere (a Fibonacci spiral)
+        const float y = 1.f - 2.f * (float(i) + 0.5f) / float(N);
+        const float rr = _sqrt(_max(0.f, 1.f - y * y));
+        const float a = float(i) * 2.39996323f;
+        const Fvector dir{rr * _cos(a), y, rr * _sin(a)};
+        if (!Level().ObjectSpace.RayPick(pos, dir, range, collide::rqtStatic, R, nullptr) || R.element < 0)
+            continue;
+        const CDB::TRI& tr = T[R.element];
+        const int pc = piece_of_tri((u32)R.element);
+        const u8 mat = pc >= 0 ? S.pieces[pc].mat : chip_class(tr.material);
+        if (mat >= NMAT || (pc >= 0 && S.pieces[pc].state != ST_INTACT))
+            continue;
+        Fvector n;
+        n.mknormal(V[tr.verts[0]], V[tr.verts[1]], V[tr.verts[2]]);
+        if (n.dotproduct(dir) > 0.f)
+            n.invert();
+        Fvector hp;
+        hp.mad(pos, dir, R.range);
+        // the face's point nearest the blast, if the same face is there
+        Fvector q = hp;
+        const float dist = Fvector().sub(pos, hp).dotproduct(n);
+        if (dist > 0.01f && dist < R.range - 0.01f)
+        {
+            Fvector back, foot;
+            back.invert(n);
+            foot.mad(pos, back, dist);
+            collide::rq_result R2;
+            if (Level().ObjectSpace.RayPick(pos, back, dist + 0.05f, collide::rqtStatic, R2, nullptr) && R2.element >= 0 && _abs(R2.range - dist) < 0.03f)
+                q = foot;
+        }
+        const float d = pos.distance_to(q);
+        bool dup = false;
+        for (const Spot& o : spots)
+            if (o.n.dotproduct(n) > 0.9f && o.p.distance_to(q) < 0.3f)
+            {
+                dup = true;
+                break;
+            }
+        if (!dup)
+            spots.push_back({q, n, d, mat, pc});
+    }
+    std::sort(spots.begin(), spots.end(), [](const Spot& a, const Spot& b) { return a.d < b.d; });
+    u32 made = 0;
+    for (u32 k = 0; k < spots.size(); ++k)
+    {
+        const Spot& o = spots[k];
+        const float f = 1.f - o.d / range;
+        if (f <= 0.f)
+            continue;
+        const float dmg = hit * C.blast_dent_k * f * f;
+        Fvector dir;
+        dir.invert(o.n);
+        const u32 before = (u32)S.dents.size();
+        dent_hit(o.p, o.n, dir, dmg, o.mat, o.pc, true);
+        made += (u32)S.dents.size() > before;
+        if ((int)k < C.blast_dent_chips)
+            chips_at(o.p, o.n, dir, _min(80.f, dmg * 0.12f), o.mat);
+    }
+    if (!spots.empty())
+        Msg("* [destruct] a blast (%.1f, %.0f m) at [%.2f, %.2f, %.2f]: %u faces round it, %u dents made, the nearest %.2f m off", hit, radius, VPUSH(pos),
+            (u32)spots.size(), made, spots[0].d);
+}
+
+// the dents for the shaders and their bowls: the dent_draw nearest the camera within dent_draw_dist, the nearest first
+void update_dents()
+{
+    if (!S.dents.empty())
+        S.dents.erase(std::remove_if(S.dents.begin(), S.dents.end(),
+                                     [](const Dent& d) { return d.piece >= 0 && (d.piece >= (int)S.pieces.size() || S.pieces[d.piece].state != ST_INTACT); }),
+                      S.dents.end());
+    u32 k = 0, ng = 0;
+    if (!S.dents.empty() && C.dent_draw > 0)
+    {
+        make_dent_models();
+        using DD = std::pair<float, u32>;
+        static xr_vector<DD> near_;
+        near_.clear();
+        const Fvector& cam = Device.vCameraPosition;
+        const float far2 = C.dent_draw_dist * C.dent_draw_dist;
+        for (u32 i = 0; i < S.dents.size(); ++i)
+        {
+            const Dent& d = S.dents[i];
+            const u32 mi = u32(d.mat) * DENT_VARS + d.var;
+            if (d.r <= 0.f || mi >= S.dent_models.size() || !S.dent_models[mi])
+                continue;
+            const float d2 = d.c.distance_to_sqr(cam);
+            if (d2 < far2)
+                near_.push_back({d2, i});
+        }
+        std::sort(near_.begin(), near_.end());
+        k = _min((u32)near_.size(), (u32)C.dent_draw);
+        if (S.dent_vis.size() < k)
+            while (S.dent_vis.size() < (u32)C.dent_draw)
+                S.dent_vis.push_back(xr_new<DentVis>());
+        // a bowl keeps its dent while it is drawn (its light settled there); the new ones take the bowls let go
+        auto drawn = [k](u32 id) {
+            for (u32 i = 0; i < k; ++i)
+                if (S.dents[near_[i].second].id == id)
+                    return true;
+            return false;
+        };
+        for (DentVis* v : S.dent_vis)
+            if (v->dent && !drawn(v->dent))
+                v->hide();
+        for (u32 i = 0; i < k; ++i)
+        {
+            const Dent& d = S.dents[near_[i].second];
+            DentVis* vis = nullptr;
+            for (DentVis* v : S.dent_vis)
+                if (v->dent == d.id)
+                {
+                    vis = v;
+                    break;
+                }
+            if (!vis)
+                for (DentVis* v : S.dent_vis)
+                    if (!v->dent)
+                    {
+                        vis = v;
+                        break;
+                    }
+            if (!vis)
+                continue;
+            Fvector b;
+            b.crossproduct(d.n, d.t);
+            Fmatrix m;
+            m.identity();
+            m.i.mul(d.t, d.r);
+            m.j.mul(b, d.r * 1.0008f); // the shaders know a bowl by this (pm_dent_clip: darker the deeper)
+            m.k.mul(d.n, d.depth / DENT_DEPTH);
+            m.c.mad(d.c, d.n, -0.005f);
+            Fvector front;
+            front.mad(d.c, d.n, 0.1f);
+            vis->place(S.dent_models[u32(d.mat) * DENT_VARS + d.var], m, front, d.r * 1.4f + 0.1f);
+            vis->dent = d.id;
+        }
+        // to the shaders in groups of 8 slots: the nearest dent not placed yet and the 7 nearest to it, a sphere round them
+        // (a pixel outside it skips them: 35 dents looped one by one over every pixel cost 4.5 ms a frame)
+        bool taken[DENT_DRAW_MAX]{};
+        for (u32 s = 0; s < k && ng < 6; ++s)
+        {
+            if (taken[s])
+                continue;
+            u32 mem[8];
+            u32 nm = 0;
+            mem[nm++] = s;
+            taken[s] = true;
+            const Fvector& cs = S.dents[near_[s].second].c;
+            while (nm < 8)
+            {
+                int best = -1;
+                float bd = flt_max;
+                for (u32 q = 0; q < k; ++q)
+                    if (!taken[q])
+                    {
+                        const float dq = S.dents[near_[q].second].c.distance_to_sqr(cs);
+                        if (dq < bd)
+                            bd = dq, best = (int)q;
+                    }
+                if (best < 0)
+                    break;
+                mem[nm++] = (u32)best;
+                taken[best] = true;
+            }
+            Fvector gc{0.f, 0.f, 0.f};
+            for (u32 j = 0; j < nm; ++j)
+                gc.add(S.dents[near_[mem[j]].second].c);
+            gc.div(float(nm));
+            float gr = 0.f;
+            for (u32 j = 0; j < nm; ++j)
+            {
+                const Dent& d = S.dents[near_[mem[j]].second];
+                const float band = d.blast ? C.dent_band_blast : C.dent_band;
+                // the shader's reach in the face, the face's own depth tolerance out of it
+                gr = _max(gr, d.c.distance_to(gc) + d.r * (DENT_RIM + band) + 0.01f + 0.03f + 0.25f * d.r + 0.02f);
+                const u32 i = ng * 8 + j;
+                portal_mod_dents[0][i].set(d.c.x, d.c.y, d.c.z, d.r);
+                portal_mod_dents[1][i].set(d.n.x, d.n.y, d.n.z, d.seed);
+                portal_mod_dents[2][i].set(d.t.x, d.t.y, d.t.z, d.blast ? -C.dent_band_blast : C.dent_band); // < 0: soot
+            }
+            for (u32 j = nm; j < 8; ++j)
+                portal_mod_dents[0][ng * 8 + j].set(0.f, 0.f, 0.f, 0.f); // the group's end
+            portal_mod_dents_groups[ng].set(gc.x, gc.y, gc.z, gr);
+            ++ng;
+        }
+    }
+    else
+        for (DentVis* v : S.dent_vis)
+            if (v->dent)
+                v->hide();
+    if (ng < 6)
+        portal_mod_dents_groups[ng].set(0.f, 0.f, 0.f, 0.f);
+    portal_mod_dents_groups_count = ng;
+    portal_mod_dents_count = ng * 8; // every slot of the groups (the empty ones zero)
+    if (ng * 8 < DENT_DRAW_MAX)
+        portal_mod_dents[0][ng * 8].set(0.f, 0.f, 0.f, 0.f);
+    S.dents_drawn = k;
 }
 
 void update_chips(float dt)
@@ -2107,10 +2634,18 @@ void reset()
         xr_delete(p.pv);
     for (ChipModel*& m : S.chip_models)
         xr_delete(m);
+    for (DentVis*& v : S.dent_vis) // E56: the bowls first (they draw the shared models)
+        xr_delete(v);
+    for (IRenderVisual*& m : S.dent_models)
+        if (m)
+            ::Render->model_Delete(m);
     S = State{};
     for (Fvector4& h : portal_mod_holes)
         h.set(0.f, 0.f, 0.f, 0.f);
     portal_mod_holes_near = false;
+    portal_mod_dents_count = 0; // E56
+    portal_mod_dents_groups_count = 0;
+    portal_mod_dents[0][0].set(0.f, 0.f, 0.f, 0.f);
 }
 
 // ------------------------------------------------------------------------------------------------------------- E54d: saved state
@@ -2156,6 +2691,7 @@ void rebuild()
     }
     S.holes.clear();
     S.holes_open = 0;
+    S.dents.clear(); // E56 (their bowls hide in the next update)
     S.chips.clear();
     S.blast_h.clear();
     S.blast_frame = u32(-1);
@@ -2167,7 +2703,7 @@ void stash()
 {
     if (!S.restored || !S.level.size() || S.gen != G.gen)
         return;
-    bool any = S.swapped || !S.holes.empty();
+    bool any = S.swapped || !S.holes.empty() || !S.dents.empty(); // E56: dents too
     for (const Piece& p : S.pieces)
         any = any || p.state != ST_INTACT || p.hp < p.hp_max;
     if (!any)
@@ -2223,6 +2759,23 @@ void stash()
         w.w_float(h.r);
         w.w_s32(h.piece);
         w.w_u8(h.mat);
+    }
+    w.w_u32((u32)S.dents.size()); // E56: after the holes (a save before it ends there)
+    for (const Dent& d : S.dents)
+    {
+        w.w_fvector3(d.c);
+        w.w_fvector3(d.n);
+        w.w_fvector3(d.t);
+        w.w_float(d.r);
+        w.w_float(d.depth);
+        w.w_float(d.dmg);
+        w.w_float(d.thick);
+        w.w_float(d.seed);
+        w.w_float(d.cap);
+        w.w_s32(d.piece);
+        w.w_u8(d.mat);
+        w.w_u8(d.var);
+        w.w_u8(d.blast ? 1 : 0);
     }
     xr_vector<u8>& blob = G.levels[S.level];
     blob.assign(w.pointer(), w.pointer() + w.size());
@@ -2314,12 +2867,39 @@ void restore()
             S.holes_open += h.r > 0.f;
         }
     }
+    u32 dents = 0;
+    if (r.elapsed() >= 4) // E56
+        for (u32 n = r.r_u32(); n && r.elapsed() >= 67; --n)
+        {
+            Dent d;
+            r.r_fvector3(d.c);
+            r.r_fvector3(d.n);
+            r.r_fvector3(d.t);
+            d.r = r.r_float();
+            d.depth = r.r_float();
+            d.dmg = r.r_float();
+            d.thick = r.r_float();
+            d.seed = r.r_float();
+            d.cap = r.r_float();
+            d.piece = r.r_s32();
+            d.mat = r.r_u8();
+            d.var = r.r_u8();
+            d.blast = r.r_u8() != 0;
+            d.time = Device.dwTimeGlobal;
+            d.id = ++S.dent_ids;
+            d.checked = d.r;
+            if (d.mat < NMAT && d.var < DENT_VARS && (d.piece < 0 || (building && d.piece < (int)S.pieces.size() && S.pieces[d.piece].state == ST_INTACT)))
+            {
+                S.dents.push_back(d);
+                ++dents;
+            }
+        }
     if (building)
         for (const Piece& p : S.pieces)
             gone += p.state == ST_GONE;
     S.dirty = building; // the solver looks once more at what stands
-    Msg("* [destruct] %s: the saved destruction put back - %u pieces gone, %u lying as %u bodies, %u holes", S.level.c_str(), gone, falling,
-        (u32)std::count_if(S.islands.begin(), S.islands.end(), [](const Island* I) { return I != nullptr; }), holes);
+    Msg("* [destruct] %s: the saved destruction put back - %u pieces gone, %u lying as %u bodies, %u holes, %u dents", S.level.c_str(), gone, falling,
+        (u32)std::count_if(S.islands.begin(), S.islands.end(), [](const Island* I) { return I != nullptr; }), holes, dents);
 }
 } // namespace
 
@@ -2344,7 +2924,10 @@ void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& 
     const u8 mat = pc >= 0 ? S.pieces[pc].mat : chip_class(target_material);
     chips_at(point, normal, b.dir, dmg, mat);
     if (pc < 0 || S.pieces[pc].state == ST_INTACT)
+    {
         hole_hit(point, b.dir, dmg, mat, pc);
+        dent_hit(point, normal, b.dir, dmg, mat, pc, false); // E56: any face, any thickness
+    }
     if (pc >= 0)
         damage_piece(u16(pc), dmg, b.dir, 1.5f);
 }
@@ -2353,7 +2936,10 @@ bool hole_pass(const Fvector& p) { return !S.holes.empty() && hole_contains(p, 0
 
 void explosion(const Fvector& pos, float radius, float hit, float impulse)
 {
-    if (!S.loaded || !C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
+    if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
+        return;
+    blast_dents(pos, radius, hit); // E56: the faces round it, on any level
+    if (!S.loaded)
         return;
     const float R = radius;
     const float D0 = hit * C.k_expl;
@@ -2415,6 +3001,7 @@ static void update_body()
         restore(); // E54d
     }
     update_holes();
+    update_dents(); // E56
     if (!S.loaded)
     {
         if (S.chips.empty())
@@ -2632,9 +3219,13 @@ LPCSTR lua_info()
     u32 broken = 0;
     for (const Bond& b : S.bonds)
         broken += b.broken;
-    xr_sprintf(buf, "loaded=%d name=%s pieces=%u intact=%u falling=%u gone=%u islands=%u awake=%u bonds=%u broken=%u swapped=%d chips=%u solves=%u holes=%u open=%u tall=%u toppled=%u crushed=%u kills=%u",
+    u32 dents = 0; // E56: open ones
+    for (const Dent& d : S.dents)
+        dents += d.r > 0.f;
+    xr_sprintf(buf, "loaded=%d name=%s pieces=%u intact=%u falling=%u gone=%u islands=%u awake=%u bonds=%u broken=%u swapped=%d chips=%u solves=%u holes=%u open=%u tall=%u toppled=%u crushed=%u kills=%u dents=%u spots=%u drawn=%u",
                S.loaded ? 1 : 0, S.name.c_str() ? S.name.c_str() : "-", (u32)S.pieces.size(), intact, falling, gone, islands, awake, (u32)S.bonds.size(), broken,
-               S.swapped ? 1 : 0, (u32)S.chips.size(), S.solves, (u32)S.holes.size(), S.holes_open, tall, S.toppled, S.crushed, S.crush_kills);
+               S.swapped ? 1 : 0, (u32)S.chips.size(), S.solves, (u32)S.holes.size(), S.holes_open, tall, S.toppled, S.crushed, S.crush_kills, dents,
+               (u32)S.dents.size(), S.dents_drawn);
     return buf;
 }
 
@@ -2819,6 +3410,16 @@ int lua_demolish(const Fvector& pos, float radius, float y_lo, float y_hi)
         }
     Msg("[destruct] demolish: standing after it %u under the band, %u reaching over it (%u anchored)", low, high, held);
     return (int)pcs.size();
+}
+
+// E56: the radius of the biggest dent reaching `pos` (within its rim of its centre; 0: none)
+float lua_dent_at(const Fvector& pos)
+{
+    float best = 0.f;
+    for (const Dent& d : S.dents)
+        if (d.r > best && d.c.distance_to(pos) < d.r * DENT_RIM + 0.03f)
+            best = d.r;
+    return best;
 }
 
 float lua_hole_at(const Fvector& pos)
