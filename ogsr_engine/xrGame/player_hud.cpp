@@ -7,6 +7,7 @@
 #include "ui_base.h"
 #include "level.h"
 #include "weapon.h"
+#include "portal_mod_dualaim.h" // portal-mod E70: dual wield split targeting
 
 player_hud* g_player_hud{};
 
@@ -393,6 +394,7 @@ void attachable_hud_item::calc_dual_transform()
     m_item_transform_dual._24_ = m_item_transform._24_;
     m_item_transform_dual._34_ = m_item_transform._34_;
     m_item_transform_dual._44_ = m_item_transform._44_;
+    pm_dualaim::turn_left(this); // portal-mod E70: the left gun turned at its own target
 }
 
 MotionID attachable_hud_item::dual_idle_motion()

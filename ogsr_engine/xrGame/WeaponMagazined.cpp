@@ -21,6 +21,7 @@
 #include "WeaponBinocularsVision.h"
 #include "player_hud.h" // portal-mod E31
 #include "portal_mod.h" // portal-mod E40
+#include "portal_mod_dualaim.h" // portal-mod E70
 #include "ai_object_location.h"
 
 #include "game_object_space.h"
@@ -798,10 +799,16 @@ void CWeaponMagazined::state_Fire(float dt)
             parent->callback(GameObject::eOnActorWeaponFire)(lua_game_object());
         }
 
-        if (m_iShotNum > m_iShootEffectorStart)
-            FireTrace(p1, d);
-        else
-            FireTrace(m_vStartPos, m_vStartDir);
+        // portal-mod E70: dual wield split targeting - a round from the left hand goes to the left gun's own target (in turn:
+        // this round; both at once: a second round from the magazine)
+        {
+            Fvector e70_p = m_iShotNum > m_iShootEffectorStart ? p1 : m_vStartPos, e70_d = m_iShotNum > m_iShootEffectorStart ? d : m_vStartDir;
+            Fvector e70_p2, e70_d2;
+            const int e70 = pm_dualaim::shot(this, e70_p, e70_d, e70_p2, e70_d2);
+            FireTrace(e70_p, e70_d);
+            if (e70 == 2 && !m_magazine.empty())
+                FireTrace(e70_p2, e70_d2);
+        }
     }
 
     if (m_iShotNum == m_iQueueSize)

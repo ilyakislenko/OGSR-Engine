@@ -22,6 +22,7 @@
 #include "artifact.h"
 #include "IKLimbsController.h"
 #include "player_hud.h"
+#include "portal_mod_dualaim.h" // portal-mod E70b: the left arm at its own target
 
 static const float y_spin0_factor = 0.0f;
 static const float y_spin1_factor = 0.4f;
@@ -276,6 +277,7 @@ void CActor::TpMirrorCallback(CBoneInstance* B)
     M.i.set(HRQ.i);
     M.j.set(HRQ.j);
     M.k.set(HRQ.k);
+    pm_dualaim::tp_left_turn(A, K, m->l, M); // portal-mod E70b: the mirrored arm turned at the left gun's target
 }
 
 // portal-mod E43: a matrix's axes turned about the unit axis ax by ang (about its own origin)

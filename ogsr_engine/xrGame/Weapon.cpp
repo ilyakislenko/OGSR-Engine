@@ -29,6 +29,7 @@
 
 #include "GamePersistent.h"
 #include "../xr_3da/x_ray.h"
+#include "portal_mod_dualaim.h" // portal-mod E70b
 
 #define ROTATION_TIME 0.25f
 
@@ -1172,6 +1173,7 @@ bool CWeapon::TpDualLeftXform(Fmatrix& m2)
     c2.add(HL.c, refl(Fvector().sub(gm.c, HR.c)));
     Fmatrix m2m;
     m2m.set(i2, j2, k2, c2);
+    pm_dualaim::tp_left_gun(pA, HL.c, m2m); // portal-mod E70b: the left gun turned with its arm
     m2.mul_43(pA->XFORM(), m2m);
     return true;
 }
