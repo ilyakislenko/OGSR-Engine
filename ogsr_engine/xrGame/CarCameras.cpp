@@ -36,7 +36,14 @@ void CCar::cam_Update(float dt, float fov)
         if (OwnerActor())
             OwnerActor()->Orientation().pitch = -active_camera->pitch;
         break;
-    case ectChase: break;
+    case ectChase:
+        if (m_pm_bike) // portal-mod E51: a bike's chase camera follows its heading only (no lean, no pitch)
+        {
+            Fvector xyz;
+            XFORM().getXYZi(xyz);
+            active_camera->yaw = xyz.y;
+        }
+        break;
     case ectFree: break;
     }
     active_camera->f_fov = fov;

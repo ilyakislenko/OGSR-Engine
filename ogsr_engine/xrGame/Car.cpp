@@ -885,6 +885,29 @@ void CCar::Init()
     }
     m_steer_angle = 0.f;
     // ref_wheel.Init();
+
+    // portal-mod E51: a two-wheeler
+    m_pm_bike = !!ini->section_exist("portal_mod_bike");
+    if (m_pm_bike)
+    {
+        m_pm_bike_L = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "wheelbase", 1.4f);
+        m_pm_bike_kp = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "roll_kp", 4000.f);
+        m_pm_bike_kd = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "roll_kd", 450.f);
+        m_pm_bike_max_lean = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "max_lean", 0.75f);
+        m_pm_bike_stand = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "stand_lean", -0.09f);
+        m_pm_bike_lat = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "lat_acc", 8.f);
+        m_pm_bike_fall = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "fall_lean", 1.15f);
+        m_pm_bike_step = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "right_step", 0.6f);
+        m_pm_bike_ki = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "roll_ki", 4000.f);
+        m_pm_bike_i_max = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "roll_i_max", 500.f);
+        // its chase camera keeps level and looks along it (CarCameras.cpp): the stock one turns with the body - a lean
+        // tilted the whole view - and looks down at 45 deg, where from 4 m a bike was a speck under its rider (bike_junk_02)
+        camera[ectChase]->m_Flags.set(CCameraBase::flRelativeLink, FALSE);
+        camera[ectChase]->pitch = READ_IF_EXISTS(ini, r_float, "portal_mod_bike", "chase_pitch", 0.3f);
+        m_pm_bike_target = m_pm_bike_stand;
+        Msg("* E51 %s is a two-wheeler (wheelbase %.2f, roll %.0f/%.0f, lean <= %.2f)", cName().c_str(), m_pm_bike_L,
+            m_pm_bike_kp, m_pm_bike_kd, m_pm_bike_max_lean);
+    }
     m_ref_radius = ini->r_float("car_definition", "reference_radius"); // ref_wheel.radius;
     b_exploded = false;
     b_engine_on = false;
@@ -1443,42 +1466,99 @@ void CCar::ClearExhausts()
         i->Clear();
 }
 
+// portal-mod E46: a door's middle in the car model's own frame (its bone OBB in the bind pose)
+static Fvector portal_mod_door_middle(IKinematics* K, u16 bone_id)
+{
+    static xr_vector<Fmatrix> bind;
+    K->LL_GetBindTransform(bind);
+    Fvector c;
+    bind[bone_id].transform_tiny(c, K->LL_GetData(bone_id).obb.m_translate);
+    return c;
+}
+
+// portal-mod E46: the doors' own tests first (an open door, the look through it); when they say no, F still gets in
+// or out - the vanilla door toggling by the use ray is gone (it closed the door the player was looking through)
 bool CCar::Use(const Fvector& pos, const Fvector& dir, const Fvector& foot_pos)
 {
-    xr_map<u16, SDoor>::iterator i;
-
     if (!Owner())
     {
         if (Enter(pos, dir, foot_pos))
             return true;
-    }
-
-    RQR.r_clear();
-    collide::ray_defs Q(pos, dir, 3.f, CDB::OPT_CULL, collide::rqtObject); // CDB::OPT_ONLYFIRST CDB::OPT_ONLYNEAREST
-    VERIFY(!fis_zero(Q.dir.square_magnitude()));
-    if (collidable.model && collidable.model->RayQuery(RQR, Q))
-    {
-        collide::rq_results& R = RQR;
-        int y = R.r_count();
-        for (int k = 0; k < y; ++k)
+        // portal-mod E46: F on the car gets in - the doors' wedge test lets no one in (the player's body shuts the door);
+        // the door nearest the player opens as he sits down
+        IKinematics* K = smart_cast<IKinematics*>(Visual());
+        Fmatrix inv;
+        inv.invert(XFORM());
+        Fvector local;
+        inv.transform_tiny(local, foot_pos);
+        SDoor* nearest = nullptr;
+        float best = flt_max;
+        for (auto& it : m_doors)
         {
-            collide::rq_result* I = R.r_begin() + k;
-            if (is_Door((u16)I->element, i))
+            const float d = portal_mod_door_middle(K, it.first).distance_to(local);
+            if (d < best)
             {
-                bool front = i->second.IsFront(pos, dir);
-                if ((Owner() && !front) || (!Owner() && front))
-                    i->second.Use();
-                if (i->second.state == SDoor::broken)
-                    break;
-                return false;
+                best = d;
+                nearest = &it.second;
             }
         }
+        if (nearest && nearest->state != SDoor::broken)
+            nearest->Open();
+        Msg("* E46 into %s (the doors' own test said no)", cName().c_str());
+        return true;
     }
-
-    if (Owner())
-        return Exit(pos, dir);
-
-    return false;
+    else
+    {
+        if (Exit(pos, dir))
+            return true;
+        // portal-mod E46: F inside gets out whatever the view: on the driver's side (else the other), the door there opened,
+        // 0.6 m out from the door and 0.6 m behind the seat (clear of the door's swing)
+        IKinematics* K = smart_cast<IKinematics*>(Visual());
+        // portal-mod E51: a seat on the middle line (a bike) gets out on the left, the stand's side
+        const float driver_side = m_sits_transforms.c.x <= 0.f ? -1.f : 1.f;
+        for (const float side : {driver_side, -driver_side})
+        {
+            SDoor* door = nullptr;
+            Fvector mid{};
+            for (auto& it : m_doors)
+            {
+                const Fvector m = portal_mod_door_middle(K, it.first);
+                if (m.x * side > 0.f && (!door || _abs(m.x) > _abs(mid.x)))
+                {
+                    door = &it.second;
+                    mid = m;
+                }
+            }
+            if (!door)
+            {
+                if (!m_doors.empty())
+                    continue;
+                mid.set(m_sits_transforms.c.x + side * 0.3f, 0.f, 0.f); // portal-mod E51: no doors at all (a bike): beside the seat
+            }
+            Fvector out_local, from_local, out_w, from_w, d;
+            out_local.set(mid.x + side * 0.6f, 0.3f, m_sits_transforms.c.z - 0.6f);
+            from_local.set(m_sits_transforms.c.x, 1.0f, m_sits_transforms.c.z);
+            XFORM().transform_tiny(out_w, out_local);
+            XFORM().transform_tiny(from_w, from_local);
+            Fvector waist;
+            waist.set(out_w.x, out_w.y + 0.7f, out_w.z);
+            d.sub(waist, from_w);
+            const float dist = d.magnitude();
+            if (dist > EPS_L)
+            {
+                d.div(dist);
+                collide::rq_result R;
+                if (Level().ObjectSpace.RayPick(from_w, d, dist, collide::rqtStatic, R, this))
+                    continue;
+            }
+            if (door && door->state != SDoor::broken) // portal-mod E51: door may be none
+                door->Open();
+            m_exit_position.set(out_w);
+            Msg("* E46 out of %s at (%.2f, %.2f, %.2f)", cName().c_str(), out_w.x, out_w.y, out_w.z);
+            return true;
+        }
+        return false;
+    }
 }
 bool CCar::DoorUse(u16 id)
 {
@@ -1757,6 +1837,86 @@ void CCar::PhDataUpdate(dReal step)
 
     m_steer_angle = m_steering_wheels.begin()->GetSteerAngle() * 0.1f + m_steer_angle * 0.9f;
     VERIFY(_valid(m_steer_angle));
+
+    if (m_pm_bike) // portal-mod E51
+        PortalModBikeStep(step);
+}
+
+// portal-mod E51: a two-wheeler's balance and steering, every physics step
+void CCar::PortalModBikeStep(dReal step)
+{
+    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    if (!K)
+        return;
+    auto it = bone_map.find(K->LL_GetBoneRoot());
+    if (it == bone_map.end() || !it->second.element)
+        return;
+    dBodyID body = it->second.element->get_body();
+    if (!body || !dBodyIsEnabled(body))
+        return;
+    // ODE's rotation is row-major 3x4: column c is the body's own axis c in the world (i right, k forward)
+    const dReal* R = dBodyGetRotation(body);
+    Fvector i, j, k, w, v;
+    i.set((float)R[0], (float)R[4], (float)R[8]);
+    j.set((float)R[1], (float)R[5], (float)R[9]);
+    k.set((float)R[2], (float)R[6], (float)R[10]);
+    const dReal* W = dBodyGetAngularVel(body);
+    const dReal* V = dBodyGetLinearVel(body);
+    w.set((float)W[0], (float)W[1], (float)W[2]);
+    v.set((float)V[0], (float)V[1], (float)V[2]);
+    const float roll = asinf(_max(-1.f, _min(1.f, -i.y))); // > 0: leaning right
+    const float roll_rate = -w.dotproduct(k); // > 0: rolling right (a positive turn about k lifts i)
+    const float yaw = w.dotproduct(j); // about its own up (> 0: turning right): w.y on a slope had the roll rate in it
+    const float fwd = v.dotproduct(k);
+    const float steer = m_steering_wheels.empty() ? 0.f : m_steering_wheels.begin()->GetSteerAngle(); // < 0: steered right
+    const bool rider = !!Owner();
+    if (!rider && _abs(roll) > m_pm_bike_fall)
+    {
+        m_pm_bike_i = 0.f;
+        return; // lying: let it be
+    }
+    float target;
+    if (!rider && _abs(fwd) < 1.f)
+        target = m_pm_bike_stand;
+    else
+    {
+        // the lean the steering asks for: lateral acceleration v^2 tan(steer) / wheelbase. Open loop - a lean taken from
+        // how it actually turned (speed x yaw rate) fed back into itself: lab run 1 swung 24 -> -19 -> 37 deg at 13 m/s
+        // and spun under braking
+        target = atanf(fwd * fwd * tanf(-steer) / (m_pm_bike_L * 9.81f));
+        target = _max(-m_pm_bike_max_lean, _min(m_pm_bike_max_lean, target));
+    }
+    m_pm_bike_target += (target - m_pm_bike_target) * _min(1.f, (float)step * 8.f);
+    // a fallen one is lifted: the target never more than right_step ahead of the roll
+    const float t = _max(roll - m_pm_bike_step, _min(roll + m_pm_bike_step, m_pm_bike_target));
+    // a steady push is trimmed out (riding straight it sat 3 deg right on ~200 N m): an integral, summed only near the
+    // target so a turn's lag does not wind it up
+    const float e = t - roll;
+    if (_abs(e) < 0.1f)
+        m_pm_bike_i = _max(-m_pm_bike_i_max, _min(m_pm_bike_i_max, m_pm_bike_i + m_pm_bike_ki * e * (float)step));
+    const float torque = -m_pm_bike_kp * e + m_pm_bike_kd * roll_rate - m_pm_bike_i; // about k: positive leans it left
+    dBodyAddTorque(body, k.x * torque, k.y * torque, k.z * torque);
+
+    // the steering cut with speed while a steer key is held
+    float lim = 0.f;
+    if (e_state_steer != idle)
+    {
+        const float sp = _max(_abs(fwd), 0.1f);
+        lim = atanf(m_pm_bike_L * m_pm_bike_lat / (sp * sp));
+        for (auto& s : m_steering_wheels)
+        {
+            if ((e_state_steer == right) == (s.pos_right > 0.f))
+                s.pwheel->SetSteerHiLimit(_min(s.hi_limit, lim));
+            else
+                s.pwheel->SetSteerLoLimit(_max(s.lo_limit, -lim));
+        }
+    }
+    if (rider && Device.dwTimeGlobal > m_pm_bike_log)
+    {
+        m_pm_bike_log = Device.dwTimeGlobal + 1000;
+        Msg("* E51 bike %s: roll %.1f target %.1f speed %.1f yaw %.2f steer %.1f lim %.1f torque %.0f (i %.0f)",
+            cName().c_str(), rad2deg(roll), rad2deg(t), fwd, yaw, rad2deg(steer), rad2deg(lim), torque, m_pm_bike_i);
+    }
 }
 
 BOOL CCar::UsedAI_Locations() { return (FALSE); }

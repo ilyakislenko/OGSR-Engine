@@ -37,5 +37,12 @@ void CCar::script_register(lua_State* L)
                   .def("IsEngineOn", &CCar__IsEngineOn)
                   .def("SwitchEngine", &CCar::SwitchEngine)
                   .def("SwitchLights", &CCar::SwitchLights)
+                  // portal-mod E52: the dashboard's readings
+                  .def("PmRpm", &CCar::PmRpm)
+                  .def("PmMaxRpm", &CCar::PmMaxRpm)
+                  .def("PmGear", &CCar::PmGear)
+                  .def("PmGears", &CCar::PmGears)
+                  .def("PmDrive", &CCar::PmDrive)
+                  .def("PmHandBrake", &CCar::PmHandBrake)
                   .def(constructor<>())];
 }

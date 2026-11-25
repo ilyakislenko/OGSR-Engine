@@ -373,6 +373,15 @@ private:
 private:
     CCarWeapon* m_car_weapon;
     float m_steer_angle;
+
+    // portal-mod E51: a two-wheeler ([portal_mod_bike] in the car definition): held upright and leaned into its turns
+    bool m_pm_bike = false;
+    float m_pm_bike_L = 1.4f, m_pm_bike_kp = 4000.f, m_pm_bike_kd = 450.f, m_pm_bike_max_lean = 0.75f;
+    float m_pm_bike_stand = -0.09f, m_pm_bike_lat = 8.f, m_pm_bike_fall = 1.15f, m_pm_bike_step = 0.6f;
+    float m_pm_bike_ki = 4000.f, m_pm_bike_i_max = 500.f;
+    float m_pm_bike_target = 0.f, m_pm_bike_i = 0.f;
+    u32 m_pm_bike_log = 0;
+    void PortalModBikeStep(dReal step);
     bool m_repairing;
     u16 m_bone_steer;
     CCameraBase* camera[3];
@@ -503,6 +512,13 @@ private:
     float GetFuel() { return m_fuel; };
     void SetFuel(float amount) { m_fuel = amount; }
     float GetFuelTank() { return m_fuel_tank; }
+    // portal-mod E52: the dashboard's readings for the scripts (CarScript.cpp; scripts\pm_car_hud.script)
+    float PmRpm() { return m_current_rpm * 60.f / (2.f * M_PI); } // rev/min (kept in rad/s)
+    float PmMaxRpm() { return m_max_rpm * 60.f / (2.f * M_PI); }
+    int PmGear() { return int(m_current_transmission_num); } // 0 reverse, 1.. forward
+    int PmGears() { return int(m_gear_ratious.size()) - 1; } // forward gears
+    int PmDrive() { return (b_engine_on && b_clutch && e_state_drive == drive) ? 1 : 0; } // the engine pulls
+    int PmHandBrake() { return brp ? 1 : 0; }
     void CarExplode();
     ////////////////////////////////////////////		////////
 

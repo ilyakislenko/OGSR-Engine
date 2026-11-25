@@ -113,6 +113,10 @@ void CLevelChanger::feel_touch_new(CObject* tpObject)
     VERIFY(l_tpActor);
     if (!l_tpActor->g_Alive())
         return;
+    // portal-mod E50: no level change at a helicopter's controls; portal-mod E51: nor in any vehicle (the car would stay behind on
+    // the old level with the player still holding it)
+    if (l_tpActor->Holder())
+        return;
 
     if (m_SilentMode || g_block_all_except_movement)
     {
@@ -185,7 +189,7 @@ void CLevelChanger::update_actor_invitation()
     {
         VERIFY(smart_cast<CActor*>(*it));
 
-        if (m_entrance_time + 5.0f < Device.fTimeGlobal)
+        if (m_entrance_time + 5.0f < Device.fTimeGlobal && !(Actor() && Actor()->Holder())) // portal-mod E50, portal-mod E51: not from any vehicle
         {
             ChangeLevel();
             m_entrance_time = Device.fTimeGlobal;
