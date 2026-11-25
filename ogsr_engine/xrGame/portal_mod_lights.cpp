@@ -105,6 +105,7 @@ struct State
 {
     bool on = true;
     const void* level = nullptr;
+    shared_str level_name; // a level loaded at the same address: its name tells (E75b)
     xr_vector<Lamp> lamps;
     xr_map<u16, u32> index;
     xr_vector<u16> torches; // CTorch ids worn by NPCs
@@ -495,6 +496,8 @@ void rescan()
             if (!e->e59_tried)
                 link_e59(*e);
             hemi(*e, e->broken);
+            if (e->broken) // (E75b) a save loaded on the same level brings the renderer's hemi lights back on
+                S.hemi_n += portal_mod_hemi_set(e->pos, C.hemi_r, false);
             continue;
         }
         if (CTorch* t = smart_cast<CTorch*>(o))
@@ -534,6 +537,7 @@ void load_switch()
 void reset_level()
 {
     S.level = g_pGameLevel;
+    S.level_name = Level().name();
     load_switch();
     S.lamps.clear();
     S.index.clear();
@@ -556,7 +560,7 @@ bool ready()
     if (!g_pGameLevel)
         return false;
     load_cfg();
-    if (S.level != g_pGameLevel)
+    if (S.level != g_pGameLevel || S.level_name != Level().name())
         reset_level();
     return true;
 }
