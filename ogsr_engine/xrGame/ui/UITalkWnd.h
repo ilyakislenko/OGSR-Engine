@@ -43,6 +43,12 @@ public:
 
     void Stop(); // deffered
 
+    // stalker-bot B1: the options on screen (id, translated text) and saying one of them like a click does
+    xr_vector<std::pair<shared_str, shared_str>> m_bot_questions;
+    bool BotAsk(const shared_str& id);
+    bool BotTopicMode() { return TopicMode(); }
+    bool BotPending() const { return m_bNeedToUpdateQuestions; }
+    shared_str BotDialogId() const;
     void UpdateQuestions();
     void NeedUpdateQuestions();
     //инициализации начального диалога собеседника

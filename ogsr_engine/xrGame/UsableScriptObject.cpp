@@ -20,6 +20,8 @@ bool CUsableScriptObject::use(CGameObject* who_use)
     VERIFY(who_use);
     CGameObject* pThis = smart_cast<CGameObject*>(this);
     VERIFY(pThis);
+    if (!pThis || pThis->getDestroy()) // stalker-bot B6: a crate just broken, on its way out
+        return false;
 
     pThis->callback(GameObject::eUseObject)(pThis->lua_game_object(), who_use->lua_game_object());
 

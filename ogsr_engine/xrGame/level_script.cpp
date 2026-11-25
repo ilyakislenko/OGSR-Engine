@@ -1487,6 +1487,7 @@ static void bot_move(int fwd, int strafe, bool sprint, bool jump, bool crouch)
     g_bot_move_flags = f;
     g_bot_move_until = Device.dwTimeGlobal + 300;
 }
+// stalker-bot B13: bot_move with the walk key (crouched: the low crouch)
 // portal-mod E26: dual wield (player_hud.cpp)
 extern bool g_hud_dual;
 static void hud_dual(bool on) { g_hud_dual = on; }
@@ -1495,6 +1496,12 @@ static bool hud_dual_on() { return g_hud_dual; }
 extern bool g_hud_dual_alt, g_hud_dual_swap;
 static void hud_dual_alt(bool on) { g_hud_dual_alt = on; }
 static bool hud_dual_swapped() { return g_hud_dual_swap; }
+static void bot_move2(int fwd, int strafe, bool sprint, bool jump, bool crouch, bool accel)
+{
+    bot_move(fwd, strafe, sprint, jump, crouch);
+    if (accel)
+        g_bot_move_flags |= mcAccel;
+}
 // stalker-bot B2: all the actor's tasks (scripts only see the active one)
 #include "GameTaskManager.h"
 #include "GameTask.h"
@@ -1789,7 +1796,7 @@ void CLevel::script_register(lua_State* L)
             def("drone_view", &drone_view), // portal-mod E45
             def("actor_tp_grip", &actor_tp_grip), def("actor_tp_grip_hands", &actor_tp_grip_hands), // portal-mod E43
             def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_actor_input", &bot_actor_input), def("bot_actor_state", &bot_actor_state), /* stalker-bot B12 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
-            def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_tasks", &bot_tasks), // stalker-bot B2
+            def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_move2", &bot_move2), /* stalker-bot B13 */ def("bot_tasks", &bot_tasks), // stalker-bot B2
             def("bot_trade_price", &bot_trade_price), def("bot_trade", &bot_trade), // stalker-bot B4
             def("bot_take_from_box", &bot_take_from_box), // stalker-bot B5
             def("set_actor_velocity", &set_actor_velocity),

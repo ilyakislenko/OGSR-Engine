@@ -95,6 +95,7 @@ extern LPSTR dbg_stalker_death_anim;
 extern BOOL b_death_anim_velocity;
 #endif
 int g_AI_inactive_time = 0;
+int g_bot_no_lc_window = 0; // stalker-bot B7b: no "go to the other level?" window at all (the bot's lab profiles)
 
 extern int g_dof_zoom_far;
 extern int g_dof_zoom_near;
@@ -1478,6 +1479,7 @@ void CCC_RegisterCommands()
     // game
     //CMD3(CCC_Mask, "g_always_run", &psActorFlags, AF_ALWAYSRUN);
     CMD1(CCC_GameDifficulty, "g_game_difficulty");
+    CMD4(CCC_Integer, "bot_no_lc_window", &g_bot_no_lc_window, 0, 1); // stalker-bot B7b
     CMD1(CCC_GameLanguage, "g_language");
 
     CMD3(CCC_Mask, "g_dof_zoom", &psActorFlags, AF_DOF_ZOOM);

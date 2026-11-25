@@ -1031,6 +1031,23 @@ void CActor::shedule_Update(u32 DT)
         CCF_Skeleton* skeleton = smart_cast<CCF_Skeleton*>(CFORM());
         skeleton->Calculate();
 
+        // stalker-bot B1: the bot's movement keys (level.bot_move), honoured while the script keeps refreshing them
+        {
+            extern u32 g_bot_move_flags;
+            extern u32 g_bot_move_until;
+            static bool bot_on = false;
+            constexpr u32 bits = mcAnyMove | mcCrouch | mcJump | mcSprint | mcAccel; // stalker-bot B13: + the walk key
+            if (g_bot_move_until > Device.dwTimeGlobal)
+            {
+                mstate_wishful = (mstate_wishful & ~bits) | (g_bot_move_flags & bits);
+                bot_on = true;
+            }
+            else if (bot_on)
+            {
+                mstate_wishful &= ~(mcJump | mcSprint | mcCrouch | mcAccel);
+                bot_on = false;
+            }
+        }
         g_cl_CheckControls(mstate_wishful, NET_SavedAccel, NET_Jump, dt);
 
         g_cl_Orientate(mstate_real, dt);

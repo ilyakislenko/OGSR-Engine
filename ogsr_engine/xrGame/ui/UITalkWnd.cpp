@@ -122,6 +122,7 @@ void CUITalkWnd::NeedUpdateQuestions() { m_bNeedToUpdateQuestions = true; }
 void CUITalkWnd::UpdateQuestions()
 {
     UITalkDialogWnd->ClearQuestions();
+    m_bot_questions.clear(); // stalker-bot B1
 
     //если нет активного диалога, то
     //режима выбора темы
@@ -323,6 +324,23 @@ void CUITalkWnd::AskQuestion()
 
 //////////////////////////////////////////////////////////////////////////
 
+// stalker-bot B1: the same as a click on an option: only ids that are on screen, not while the list is stale
+bool CUITalkWnd::BotAsk(const shared_str& id)
+{
+    if (m_bNeedToUpdateQuestions)
+        return false;
+    bool found = false;
+    for (const auto& q : m_bot_questions)
+        found = found || q.first == id;
+    if (!found)
+        return false;
+    UITalkDialogWnd->m_ClickedQuestionID = id;
+    AskQuestion();
+    return true;
+}
+
+shared_str CUITalkWnd::BotDialogId() const { return m_pCurrentDialog ? m_pCurrentDialog->GetDialogID() : shared_str(""); }
+
 void CUITalkWnd::SayPhrase(const shared_str& phrase_id)
 {
     AddAnswer(m_pCurrentDialog->GetPhraseText(phrase_id), m_pOurInvOwner->Name());
@@ -343,6 +361,7 @@ void CUITalkWnd::AddQuestion(const shared_str& text, const shared_str& value, in
 {
     if (text.size() == 0)
         return;
+    m_bot_questions.emplace_back(value, CStringTable().translate(text)); // stalker-bot B1
     UITalkDialogWnd->AddQuestion(*CStringTable().translate(text), value.c_str(), i++);
 }
 

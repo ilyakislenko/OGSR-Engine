@@ -203,6 +203,24 @@ void CLevelChanger::update_actor_invitation()
 
 void CLevelChanger::ChangeLevel()
 {
+    extern u32 g_bot_lc_until; // stalker-bot B1: level.bot_level_change_auto() refreshes it
+    if (g_bot_lc_until > Device.dwTimeGlobal)
+    {
+        NET_Packet pk;
+        pk.w_begin(M_CHANGE_LEVEL);
+        pk.w(&m_game_vertex_id, sizeof(m_game_vertex_id));
+        pk.w(&m_level_vertex_id, sizeof(m_level_vertex_id));
+        pk.w_vec3(m_position);
+        pk.w_vec3(m_angles);
+        Level().Send(pk, net_flags(TRUE));
+        return;
+    }
+    // stalker-bot B7: the bot at the wheel, not heading out: no window (it pauses the game, and no script runs
+    // during a pause to answer it)
+    extern u32 g_bot_move_until;
+    extern int g_bot_no_lc_window; // stalker-bot B7b
+    if (g_bot_move_until > Device.dwTimeGlobal || g_bot_no_lc_window)
+        return;
     Fvector p, r;
     bool b = get_reject_pos(p, r);
     CUIGameSP* pGameSP = smart_cast<CUIGameSP*>(HUD().GetUI()->UIGame());

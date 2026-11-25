@@ -40,5 +40,7 @@ public:
 
     virtual bool IsVisibleForZones() { return false; }
 
+    GameGraph::_GRAPH_ID bot_dest_gv() const { return m_game_vertex_id; } // stalker-bot B1
+
     void OnRender();
 };
