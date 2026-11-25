@@ -408,6 +408,15 @@ void CCustomMonster::UpdateCL()
     START_PROFILE("CustomMonster/client_update/network extrapolation")
     if (NET.empty())
     {
+    if (m_puppet && g_Alive()) // portal-mod E33: the script's transform, the capsule along
+    {
+        XFORM().set(m_puppet_xform);
+        if (character_physics_support()->movement()->CharacterExist())
+        {
+            character_physics_support()->movement()->SetPosition(m_puppet_xform.c);
+            character_physics_support()->movement()->SetVelocity(0.f, 0.f, 0.f);
+        }
+    }
         update_animation_movement_controller();
         return;
     }
@@ -484,6 +493,16 @@ void CCustomMonster::UpdateCL()
     if (IsMyCamera())
         UpdateCamera();
 #endif // DEBUG
+
+    if (m_puppet && g_Alive()) // portal-mod E33: the script's transform, the capsule along
+    {
+        XFORM().set(m_puppet_xform);
+        if (character_physics_support()->movement()->CharacterExist())
+        {
+            character_physics_support()->movement()->SetPosition(m_puppet_xform.c);
+            character_physics_support()->movement()->SetVelocity(0.f, 0.f, 0.f);
+        }
+    }
 
     update_animation_movement_controller();
 

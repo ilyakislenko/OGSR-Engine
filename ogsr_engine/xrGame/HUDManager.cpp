@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "HUDManager.h"
+#include "portal_mod.h" // portal-mod E21
 #include "hudtarget.h"
 
 #include "actor.h"
@@ -227,7 +228,7 @@ bool need_render_hud()
         return false;
 
     CActor* A = smart_cast<CActor*>(O);
-    if (A && (!A->HUDview() || !A->g_Alive()))
+    if (A && (!A->HUDview() || !A->g_Alive() || portal_mod::cine)) // portal-mod E21: no gun in hands from a scene's camera
         return false;
 
     if (smart_cast<CCar*>(O))
@@ -280,7 +281,7 @@ void CHUDManager::Render_Actor_Shadow(u32 context_id) // added by KD
 
     // KD: we need to render actor shadow only in first eye cam mode because
     // in other modes actor model already in scene graph and renders well
-    if (A->active_cam() != eacFirstEye)
+    if (A->active_cam() != eacFirstEye || portal_mod::cine) // portal-mod E21: the model is in the scene, it casts its own
         return;
 /*
     const auto flashlight = smart_cast<CFlashlight*>(A->inventory().ItemFromSlot(DETECTOR_SLOT));

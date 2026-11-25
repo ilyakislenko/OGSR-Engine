@@ -326,6 +326,11 @@ protected:
     u8 GetCurrentHudOffsetIdx() const override;
     virtual bool IsHudModeNow();
 
+public:
+    bool TpDualLeftXform(Fmatrix& m2); // portal-mod E40: the second gun of the third-person two-gun pose (E36/E39)
+
+protected:
+
     virtual void LoadFireParams(LPCSTR section, LPCSTR prefix);
 
 public:

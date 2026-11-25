@@ -251,6 +251,10 @@ public:
     bool get_invisible();
     void set_manual_invisibility(bool val);
     void set_alien_control(bool val);
+    // portal-mod E33: a monster held by the script
+    float puppet_cycle(LPCSTR anim, float speed);
+    void puppet_pose(Fvector pos, float h, float p, float b);
+    void puppet_off();
 
     // Zombie
     bool fake_death_fall_down();

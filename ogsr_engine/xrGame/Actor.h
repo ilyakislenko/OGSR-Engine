@@ -594,6 +594,67 @@ public:
 
     void ForceTransform(const Fmatrix& m) override;
     void portal_mod_place(const Fvector& p); // portal-mod E12: teleport with no collision correction
+    // portal-mod E34: the right arm held out at a point in the world (the T-800 video: the bloodsucker held by the
+    // throat - the third-person body raises its arm to it); k 0..1 blends from the animation's arm, 0 = off
+    void portal_mod_arm_aim(const Fvector& target, float k);
+    static void ArmAimUpperCallback(CBoneInstance*);
+    static void ArmAimForeCallback(CBoneInstance*);
+    Fvector m_arm_aim_target{};
+    float m_arm_aim_k{};
+    Fvector m_arm_axis[2]{}; // upper arm -> elbow, forearm -> wrist, each in the bone's own frame
+    // portal-mod E36: two guns in the third person - both arms held out at a point, a second copy of the weapon in the
+    // left hand (the script keeps it on each frame: level.actor_tp_dual(true, point))
+    void portal_mod_tp_dual(bool on, const Fvector& target);
+    static void LArmAimUpperCallback(CBoneInstance*);
+    static void LArmAimForeCallback(CBoneInstance*);
+    bool m_tp_dual{};
+    Fvector m_tp_dual_target{};
+    Fvector m_larm_axis[2]{};
+    u16 m_tp_dual_hand[2]{BI_NONE, BI_NONE}; // the right hand, the left hand
+    Fvector m_spine_fwd[4]{}; // portal-mod E38: the chest's forward in bip01_spine/spine1/spine2/head's own frames
+    // portal-mod E39: the left arm a mirror image of the right while the two-gun pose is on
+    struct SPortalMirror
+    {
+        CActor* actor;
+        u16 l, r;  // the left bone, its right twin
+        Fmatrix q; // the bind pose's left/right axis flip (signed axes)
+    };
+    static void TpMirrorCallback(CBoneInstance*);
+    SPortalMirror m_tp_mirror[32]{};
+    u16 m_tp_mirror_n{};
+    u16 m_tp_chest{BI_NONE};
+    Fvector m_tp_chest_lat{}; // the chest's left-right axis in bip01_spine2's own frame
+    // portal-mod E43: a two-handed grip - each wrist on its point (two-bone IK), the hands turned onto the object, the
+    // fingers curled; E36's aim, E38's spine yaw and E39's mirror off meanwhile (side 0 the right arm, 1 the left)
+    void portal_mod_tp_grip(bool on, const Fvector& r, const Fvector& l, float elbow_out);
+    void portal_mod_tp_grip_hands(const Fvector& rf, const Fvector& rn, const Fvector& lf, const Fvector& ln, float rc, float lc);
+    void portal_grip_setup(IKinematics* V);
+    void portal_grip_upper(CBoneInstance* B, int s);
+    void portal_grip_fore(CBoneInstance* B, int s);
+    void portal_grip_hand(CBoneInstance* B, int s);
+    void portal_grip_finger(CBoneInstance* B, int s);
+    struct SPortalGrip
+    {
+        CActor* actor;
+        u16 bone;
+        u8 side, kind; // kind 0 the hand, 1 a finger joint
+    };
+    static void GripBoneCallback(CBoneInstance*);
+    SPortalGrip m_grip_cb[8]{};
+    u16 m_grip_cb_n{};
+    bool m_tp_grip{};
+    Fvector m_grip_pt[2]{};
+    Fvector m_grip_fing[2]{};
+    Fvector m_grip_palm[2]{};
+    float m_grip_curl[2]{};
+    float m_grip_out{0.7f};
+    Fmatrix m_grip_fore_local[2]{}; // the forearm's animated turn in its upper arm's frame (the frame before)
+    bool m_grip_fore_ok[2]{};
+    float m_grip_len[2][2]{}; // the upper arm's and the forearm's lengths (bind pose)
+    u16 m_grip_bone[2][3]{{BI_NONE, BI_NONE, BI_NONE}, {BI_NONE, BI_NONE, BI_NONE}}; // upper arm, forearm, hand
+    u16 m_grip_fing_bone[2][6]{{BI_NONE, BI_NONE, BI_NONE, BI_NONE, BI_NONE, BI_NONE}, {BI_NONE, BI_NONE, BI_NONE, BI_NONE, BI_NONE, BI_NONE}};
+    Fvector m_grip_hand_ax[2]{}; // the knuckle axis in the hand's own frame
+    Fvector m_grip_hand_n[2]{};  // the knuckle normal (knuckle axis x finger1 -> finger2) in the hand's own frame
     void ForceTransformAndDirection(const Fmatrix& m) override;
 
     //	virtual void			UpdatePosStack	( u32 Time0, u32 Time1 );

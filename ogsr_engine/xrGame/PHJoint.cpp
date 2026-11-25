@@ -842,6 +842,8 @@ void CPHJoint::SetLimitsActive(int axis_num)
 float CPHJoint::GetAxisAngle(int axis_num)
 {
     float ret = dInfinity;
+    if (!bActive || !m_joint) // portal-mod E25: a joint taken apart from Lua has no ODE joint
+        return 0.f;
     switch (eType)
     {
     case hinge2: ret = dJointGetHinge2Angle1(m_joint); break;

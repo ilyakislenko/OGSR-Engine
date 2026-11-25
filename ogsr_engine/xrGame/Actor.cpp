@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "portal_mod.h" // portal-mod E21
 #include "Actor_Flags.h"
 #include "hudmanager.h"
 #ifdef DEBUG

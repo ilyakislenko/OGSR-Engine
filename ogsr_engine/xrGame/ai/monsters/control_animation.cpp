@@ -39,6 +39,12 @@ void CControlAnimation::reset_data()
 
 void CControlAnimation::update_frame()
 {
+    if (m_script_cycle) // portal-mod E33: the script's cycle plays on
+    {
+        m_skeleton_animated->UpdateTracks();
+        return;
+    }
+
     if (m_freeze)
         return;
 
@@ -275,6 +281,34 @@ void CControlAnimation::freeze()
         m_saved_torso_speed = m_data.torso.blend->speed;
         m_data.torso.blend->speed = 0.f;
     }
+}
+
+// portal-mod E33: the script plays a cycle of the model ("" gives the animation back to the monster)
+float CControlAnimation::script_cycle(LPCSTR name, float speed)
+{
+    if (!name || !name[0])
+    {
+        m_script_cycle = false;
+        m_data.global.actual = false;
+        return 0.f;
+    }
+    const MotionID m = m_skeleton_animated->ID_Cycle_Safe(name);
+    if (!m.valid())
+    {
+        Msg("! portal-mod E33: no cycle [%s]", name);
+        return 0.f;
+    }
+    m_script_cycle = true;
+    CBlend* b = m_skeleton_animated->PlayCycle(m, TRUE);
+    if (!b) // portal-mod E35: an all-parts motion (the controller's psy_attack_N) - LL_PlayCycle returns no blend then
+    {
+        const u32 n = m_skeleton_animated->LL_PartBlendsCount(0);
+        b = n ? m_skeleton_animated->LL_PartBlend(0, n - 1) : nullptr;
+    }
+    if (!b)
+        return 0.f;
+    b->speed *= speed;
+    return b->speed > 0.f ? b->timeTotal / b->speed : 0.f;
 }
 
 void CControlAnimation::unfreeze()

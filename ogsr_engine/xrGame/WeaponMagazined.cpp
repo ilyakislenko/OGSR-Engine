@@ -19,6 +19,8 @@
 #include "string_table.h"
 #include "WeaponBinoculars.h"
 #include "WeaponBinocularsVision.h"
+#include "player_hud.h" // portal-mod E31
+#include "portal_mod.h" // portal-mod E40
 #include "ai_object_location.h"
 
 #include "game_object_space.h"
@@ -839,6 +841,78 @@ void CWeaponMagazined::OnShot()
 
     //дым из ствола
     StartSmokeParticles(get_LastFP(), vel);
+
+    // portal-mod E31: two rifles at once (dual wield, not in turn) - the left hand's gun flashes, smokes, drops a shell
+    {
+        extern bool g_hud_dual, g_hud_dual_alt;
+        attachable_hud_item* hi = (g_hud_dual && !g_hud_dual_alt && ParentIsActor() && IsHudModeNow()) ? HudItemData() : nullptr;
+        if (hi)
+        {
+            firedeps fd2;
+            hi->dual_mirror_firedeps(fd2);
+            const BOOL hud = IsHudModeNow() && m_bParticlesHudMode;
+            if (ShouldPlayFlameParticles() && m_sFlameParticlesCurrent.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sFlameParticlesCurrent, TRUE);
+                Fmatrix m = fd2.m_FireParticlesXForm;
+                m.c.set(fd2.vLastFP);
+                p->UpdateParent(m, vel);
+                p->Play(hud);
+            }
+            if (m_sSmokeParticlesCurrent.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sSmokeParticlesCurrent, TRUE);
+                Fmatrix m = fd2.m_FireParticlesXForm;
+                m.c.set(fd2.vLastFP);
+                p->UpdateParent(m, vel);
+                p->Play(hud);
+            }
+            if (m_sShellParticles.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sShellParticles, TRUE);
+                Fmatrix m = get_ParticlesXFORM();
+                m.c.set(fd2.vLastSP);
+                p->UpdateParent(m, vel);
+                p->Play(hud);
+            }
+        }
+    }
+
+    // portal-mod E40: from a scene's camera E31's mirror (the HUD's, by the head) is off; the left gun of the
+    // third-person pose flashes, smokes and drops its shell at its own world muzzle
+    if (portal_mod::cine)
+    {
+        extern bool g_hud_dual, g_hud_dual_alt;
+        Fmatrix m2;
+        if (g_hud_dual && !g_hud_dual_alt && ParentIsActor() && TpDualLeftXform(m2))
+        {
+            Fvector fp2, sp2;
+            m2.transform_tiny(fp2, vLoadedFirePoint);
+            m2.transform_tiny(sp2, vLoadedShellPoint);
+            Fmatrix m = m2;
+            m.c.set(fp2);
+            if (ShouldPlayFlameParticles() && m_sFlameParticlesCurrent.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sFlameParticlesCurrent, TRUE);
+                p->UpdateParent(m, vel);
+                p->Play(FALSE);
+            }
+            if (m_sSmokeParticlesCurrent.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sSmokeParticlesCurrent, TRUE);
+                p->UpdateParent(m, vel);
+                p->Play(FALSE);
+            }
+            if (m_sShellParticles.size())
+            {
+                CParticlesObject* p = CParticlesObject::Create(*m_sShellParticles, TRUE);
+                Fmatrix ms = m2;
+                ms.c.set(sp2);
+                p->UpdateParent(ms, vel);
+                p->Play(FALSE);
+            }
+        }
+    }
 
     update_visual_bullet_textures();
 }

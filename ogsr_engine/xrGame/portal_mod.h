@@ -171,6 +171,9 @@ inline void contact_point(const float* pos, const float* nrm, const float* body,
     out[2] = body[2] + nrm[2] * d;
 }
 
+// portal-mod E21: a scene's camera is on (level.cine_cam): the picture is from it, the player's model is drawn
+inline bool cine = false;
+
 // portal-mod E10: roll added to the first-person camera (radians), set from Lua (level.portal_view_roll)
 inline float view_roll = 0.f;
 } // namespace portal_mod

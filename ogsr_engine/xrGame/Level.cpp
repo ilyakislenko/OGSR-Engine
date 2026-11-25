@@ -890,6 +890,14 @@ static void portal_mod_npc_frame()
 
     static xr_vector<CObject*> near_objects;
     static xr_map<u16, u32> cooldown; // object id -> time before which it may not travel again
+    static xr_map<u16, int> came_out; // portal-mod E23: object id -> the portal it last came out of
+    // portal-mod E22: each one's feet at its last two looks (falling fast it moves up to a metre between them)
+    struct Feet
+    {
+        Fvector prev, cur;
+        u32 frame{}, t_prev{}, t_cur{};
+    };
+    static xr_map<u16, Feet> feet_seen;
     const u32 now = Device.dwTimeGlobal;
 
     for (int i = 0; i < 2; ++i)
@@ -907,12 +915,18 @@ static void portal_mod_npc_frame()
             if (!mc || !mc->CharacterExist())
                 continue;
             auto cd = cooldown.find(m->ID());
-            if (cd != cooldown.end() && cd->second > now)
+            if (cd != cooldown.end() && cd->second > now && came_out[m->ID()] == i) // portal-mod E23: only that one
                 continue;
 
             Fvector v;
             mc->GetCharacterVelocity(v);
             const Fvector feet = m->Position();
+            Feet& fs = feet_seen[m->ID()]; // portal-mod E22
+            if (fs.frame == 0)
+                fs.prev = fs.cur = feet, fs.t_prev = fs.t_cur = now;
+            else if (fs.frame != Device.dwFrame)
+                fs.prev = fs.cur, fs.t_prev = fs.t_cur, fs.cur = feet, fs.t_cur = now;
+            fs.frame = Device.dwFrame;
             const float H = _max(mc->Box().y2 - mc->Box().y1, 0.4f); // body height
             const float fr = _max(mc->FootRadius(), 0.2f);
             Fvector v_in;
@@ -923,7 +937,22 @@ static void portal_mod_npc_frame()
                 q.sub(feet, A.c);
                 const float d = q.dotproduct(A.n);
                 const float x = q.dotproduct(A.r) / A.hw, y = q.dotproduct(A.u) / A.hh;
-                if (d < -0.3f || d > 0.4f || x * x + y * y > 0.75f * 0.75f)
+                bool in = d >= -0.3f && d <= 0.4f && x * x + y * y <= 0.75f * 0.75f;
+                if (!in && d < 0.f && now - fs.t_prev < 600)
+                {
+                    // portal-mod E22: the plane crossed downwards since the last look, inside the oval
+                    Fvector q0;
+                    q0.sub(fs.prev, A.c);
+                    const float d0 = q0.dotproduct(A.n);
+                    if (d0 > 0.f)
+                    {
+                        Fvector qc;
+                        qc.lerp(q0, q, d0 / (d0 - d));
+                        const float xc = qc.dotproduct(A.r) / A.hw, yc = qc.dotproduct(A.u) / A.hh;
+                        in = xc * xc + yc * yc <= 0.75f * 0.75f;
+                    }
+                }
+                if (!in)
                     continue;
                 const float down = -v.dotproduct(A.n);
                 v_in.mad(v, A.n, down).mad(A.n, -_max(down, 2.5f)); // keep the sideways part, at least 2.5 m/s down
@@ -981,6 +1010,9 @@ static void portal_mod_npc_frame()
             if (m->animation_movement_controlled())
                 m->destroy_anim_mov_ctrl();
             cooldown[m->ID()] = now + 400;
+            came_out[m->ID()] = 1 - i; // portal-mod E23
+            fs.prev = fs.cur = out; // portal-mod E22: the next look starts from the exit
+            fs.t_prev = fs.t_cur = now;
             Msg("[portal_mod] %s went through portal %d at %.1f m/s (npc), out at %.1f m/s", m->cName().c_str(), i,
                 v_in.magnitude(), v_out.magnitude());
         }

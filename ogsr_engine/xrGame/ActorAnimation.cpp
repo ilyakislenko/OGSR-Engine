@@ -36,6 +36,40 @@ static const float r_spin1_factor = 0.3f;
 static const float r_shoulder_factor = 0.2f;
 static const float r_head_factor = 0.2f;
 
+// portal-mod E38: a spine bone yawed about the model's up (about its own origin) so the chest's forward - fwd_local in
+// the bone's frame - turns k of the way to the point (seen from above); the bones after it follow
+static void portal_face_bone(CBoneInstance* B, const Fvector& fwd_local, const Fvector& target_world, const Fmatrix& xform, float k)
+{
+    if (fwd_local.square_magnitude() < EPS)
+        return;
+    Fmatrix inv;
+    inv.invert(xform);
+    Fvector tgt;
+    inv.transform_tiny(tgt, target_world);
+    Fmatrix& M = B->mTransform;
+    Fvector cur, want;
+    M.transform_dir(cur, fwd_local);
+    want.sub(tgt, M.c);
+    cur.y = 0.f;
+    want.y = 0.f;
+    if (cur.square_magnitude() < EPS || want.square_magnitude() < 0.01f)
+        return;
+    cur.normalize();
+    want.normalize();
+    const float s = cur.z * want.x - cur.x * want.z; // (cur x want).y
+    float ang = atan2f(s, cur.dotproduct(want)) * k;
+    clamp(ang, -1.22f, 1.22f);
+    const float ca = _cos(ang), sa = _sin(ang);
+    auto rot = [&](Fvector& v) { // about (0, 1, 0) by ang (Rodrigues)
+        const float x = v.x, z = v.z;
+        v.x = x * ca + z * sa;
+        v.z = z * ca - x * sa;
+    };
+    rot(M.i);
+    rot(M.j);
+    rot(M.k);
+}
+
 void CActor::Spin0Callback(CBoneInstance* B)
 {
     CActor* A = static_cast<CActor*>(B->callback_param());
@@ -49,6 +83,8 @@ void CActor::Spin0Callback(CBoneInstance* B)
     spin.setXYZ(-bone_pitch, bone_yaw, bone_roll);
     B->mTransform.mulA_43(spin);
     B->mTransform.c = c;
+    if (A->m_tp_dual) // portal-mod E38
+        portal_face_bone(B, A->m_spine_fwd[0], A->m_tp_dual_target, A->XFORM(), 0.34f);
 }
 void CActor::Spin1Callback(CBoneInstance* B)
 {
@@ -63,6 +99,8 @@ void CActor::Spin1Callback(CBoneInstance* B)
     spin.setXYZ(-bone_pitch, bone_yaw, bone_roll);
     B->mTransform.mulA_43(spin);
     B->mTransform.c = c;
+    if (A->m_tp_dual) // portal-mod E38
+        portal_face_bone(B, A->m_spine_fwd[1], A->m_tp_dual_target, A->XFORM(), 0.5f);
 }
 void CActor::ShoulderCallback(CBoneInstance* B)
 {
@@ -76,6 +114,8 @@ void CActor::ShoulderCallback(CBoneInstance* B)
     spin.setXYZ(-bone_pitch, bone_yaw, bone_roll);
     B->mTransform.mulA_43(spin);
     B->mTransform.c = c;
+    if (A->m_tp_dual) // portal-mod E38
+        portal_face_bone(B, A->m_spine_fwd[2], A->m_tp_dual_target, A->XFORM(), 1.f);
 }
 void CActor::HeadCallback(CBoneInstance* B)
 {
@@ -89,6 +129,8 @@ void CActor::HeadCallback(CBoneInstance* B)
     spin.setXYZ(-bone_pitch, bone_yaw, bone_roll);
     B->mTransform.mulA_43(spin);
     B->mTransform.c = c;
+    if (A->m_tp_dual) // portal-mod E38
+        portal_face_bone(B, A->m_spine_fwd[3], A->m_tp_dual_target, A->XFORM(), 1.f);
 }
 
 void CActor::VehicleHeadCallback(CBoneInstance* B)
@@ -103,6 +145,354 @@ void CActor::VehicleHeadCallback(CBoneInstance* B)
     spin.setHPB(bone_yaw, bone_pitch, -bone_roll);
     B->mTransform.mulA_43(spin);
     B->mTransform.c = c;
+}
+
+// portal-mod E34: a bone of the right arm turned about its own origin so its axis (to the next joint) points at the
+// script's target, by k (the children follow: the upper arm, then the forearm, leave the arm straight at the point)
+static void portal_aim_bone(CBoneInstance* B, const Fvector& axis, const Fvector& target_world, const Fmatrix& xform, float k)
+{
+    if (k <= 0.f || axis.square_magnitude() < EPS)
+        return;
+    Fmatrix inv;
+    inv.invert(xform);
+    Fvector tgt;
+    inv.transform_tiny(tgt, target_world);
+    Fmatrix& M = B->mTransform;
+    Fvector cur;
+    M.transform_dir(cur, axis);
+    if (cur.square_magnitude() < EPS)
+        return;
+    cur.normalize();
+    Fvector want;
+    want.sub(tgt, M.c);
+    if (want.magnitude() < 0.05f)
+        return;
+    want.normalize();
+    Fvector ax;
+    ax.crossproduct(cur, want);
+    const float s = ax.magnitude(), c = cur.dotproduct(want);
+    if (s < 1e-6f)
+        return;
+    ax.div(s);
+    const float ang = atan2f(s, c) * _min(k, 1.f), ca = _cos(ang), sa = _sin(ang);
+    auto rod = [&](Fvector& v) { // Rodrigues: v about ax by ang
+        Fvector kxv;
+        kxv.crossproduct(ax, v);
+        const float kd = ax.dotproduct(v);
+        Fvector r;
+        r.set(v).mul(ca).mad(kxv, sa).mad(ax, kd * (1.f - ca));
+        v.set(r);
+    };
+    rod(M.i);
+    rod(M.j);
+    rod(M.k);
+}
+
+void CActor::ArmAimUpperCallback(CBoneInstance* B)
+{
+    CActor* A = static_cast<CActor*>(B->callback_param());
+    if (A->m_tp_grip) // portal-mod E43
+    {
+        A->portal_grip_upper(B, 0);
+        return;
+    }
+    if (A->m_arm_aim_k <= 0.f && A->m_tp_dual) // portal-mod E36: the two-gun pose when no E34 aim is on
+        portal_aim_bone(B, A->m_arm_axis[0], A->m_tp_dual_target, A->XFORM(), 1.f);
+    else
+        portal_aim_bone(B, A->m_arm_axis[0], A->m_arm_aim_target, A->XFORM(), A->m_arm_aim_k);
+}
+
+void CActor::ArmAimForeCallback(CBoneInstance* B)
+{
+    CActor* A = static_cast<CActor*>(B->callback_param());
+    if (A->m_tp_grip) // portal-mod E43
+    {
+        A->portal_grip_fore(B, 0);
+        return;
+    }
+    if (A->m_arm_aim_k <= 0.f && A->m_tp_dual) // portal-mod E36
+        portal_aim_bone(B, A->m_arm_axis[1], A->m_tp_dual_target, A->XFORM(), 1.f);
+    else
+        portal_aim_bone(B, A->m_arm_axis[1], A->m_arm_aim_target, A->XFORM(), A->m_arm_aim_k);
+}
+
+// portal-mod E36: the left arm, held out at the same point while the two-gun pose is on
+void CActor::LArmAimUpperCallback(CBoneInstance* B)
+{
+    CActor* A = static_cast<CActor*>(B->callback_param());
+    if (A->m_tp_dual)
+        portal_aim_bone(B, A->m_larm_axis[0], A->m_tp_dual_target, A->XFORM(), 1.f);
+}
+
+void CActor::LArmAimForeCallback(CBoneInstance* B)
+{
+    CActor* A = static_cast<CActor*>(B->callback_param());
+    if (A->m_tp_dual)
+        portal_aim_bone(B, A->m_larm_axis[1], A->m_tp_dual_target, A->XFORM(), 1.f);
+}
+
+// portal-mod E39: a left-arm bone turned to its right twin's turn reflected across the chest's middle plane, times the
+// bind pose's axis flip q; its place stays (from its parent), so the arm comes out the right arm's mirror image
+void CActor::TpMirrorCallback(CBoneInstance* B)
+{
+    auto* m = static_cast<SPortalMirror*>(B->callback_param());
+    CActor* A = m->actor;
+    if (A->m_tp_grip) // portal-mod E43: the left arm's bones go to the grip instead
+    {
+        if (m->l == A->m_grip_bone[1][0])
+            A->portal_grip_upper(B, 1);
+        else if (m->l == A->m_grip_bone[1][1])
+            A->portal_grip_fore(B, 1);
+        else if (m->l == A->m_grip_bone[1][2])
+            A->portal_grip_hand(B, 1);
+        else
+            for (u16 f : A->m_grip_fing_bone[1])
+                if (f == m->l)
+                {
+                    A->portal_grip_finger(B, 1);
+                    break;
+                }
+        return;
+    }
+    if (!A->m_tp_dual || A->m_tp_chest == BI_NONE)
+        return;
+    IKinematics* K = smart_cast<IKinematics*>(A->Visual());
+    if (!K)
+        return;
+    Fvector n;
+    K->LL_GetTransform(A->m_tp_chest).transform_dir(n, A->m_tp_chest_lat);
+    if (n.square_magnitude() < EPS)
+        return;
+    n.normalize();
+    Fmatrix H; // reflection across the plane with normal n
+    H.identity();
+    H.i.set(1.f - 2.f * n.x * n.x, -2.f * n.y * n.x, -2.f * n.z * n.x);
+    H.j.set(-2.f * n.x * n.y, 1.f - 2.f * n.y * n.y, -2.f * n.z * n.y);
+    H.k.set(-2.f * n.x * n.z, -2.f * n.y * n.z, 1.f - 2.f * n.z * n.z);
+    Fmatrix HR, HRQ;
+    HR.mul_43(H, K->LL_GetTransform(m->r));
+    HRQ.mul_43(HR, m->q);
+    Fmatrix& M = B->mTransform;
+    M.i.set(HRQ.i);
+    M.j.set(HRQ.j);
+    M.k.set(HRQ.k);
+}
+
+// portal-mod E43: a matrix's axes turned about the unit axis ax by ang (about its own origin)
+static void portal_turn_axes(Fmatrix& M, const Fvector& ax, float ang)
+{
+    const float ca = _cos(ang), sa = _sin(ang);
+    for (Fvector* v : {&M.i, &M.j, &M.k})
+    {
+        Fvector kxv, r;
+        kxv.crossproduct(ax, *v);
+        const float kd = ax.dotproduct(*v);
+        r.set(*v).mul(ca).mad(kxv, sa).mad(ax, kd * (1.f - ca));
+        v->set(r);
+    }
+}
+
+// portal-mod E43: the least turn of M's axes taking the unit vector cur to the unit vector want
+static void portal_turn_to(Fmatrix& M, const Fvector& cur, const Fvector& want)
+{
+    Fvector ax;
+    ax.crossproduct(cur, want);
+    const float s = ax.magnitude(), c = cur.dotproduct(want);
+    if (s < 1e-6f)
+        return;
+    ax.div(s);
+    portal_turn_axes(M, ax, atan2f(s, c));
+}
+
+// portal-mod E43: the upper arm turned to the elbow's place for the wrist's point, then rolled about itself so the
+// forearm's animated bend lies in the arm's plane
+void CActor::portal_grip_upper(CBoneInstance* B, int s)
+{
+    const float L1 = m_grip_len[s][0], L2 = m_grip_len[s][1];
+    if (L1 < 0.05f || L2 < 0.05f)
+        return;
+    Fmatrix& M = B->mTransform;
+    Fmatrix inv;
+    inv.invert(XFORM());
+    Fvector T, D;
+    inv.transform_tiny(T, m_grip_pt[s]);
+    D.sub(T, M.c);
+    float d = D.magnitude();
+    if (d < 0.05f)
+        return;
+    D.div(d);
+    d = _max(_min(d, L1 + L2 - 0.002f), _abs(L1 - L2) + 0.01f);
+    const float ca = _max(-1.f, _min(1.f, (L1 * L1 + d * d - L2 * L2) / (2.f * L1 * d)));
+    const float sa = _sqrt(_max(0.f, 1.f - ca * ca));
+    // the pole: out from the chest (this shoulder's side), back, down
+    Fvector out, fwd;
+    out.set(s == 0 ? 1.f : -1.f, 0.f, 0.f);
+    fwd.set(0.f, 0.f, -1.f);
+    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    if (K && m_tp_chest != BI_NONE)
+    {
+        const Fmatrix& C = K->LL_GetTransform(m_tp_chest);
+        C.transform_dir(fwd, m_spine_fwd[2]);
+        fwd.y = 0.f;
+        fwd.normalize_safe();
+        Fvector o;
+        o.sub(M.c, C.c);
+        o.y = 0.f;
+        o.mad(fwd, -o.dotproduct(fwd));
+        if (o.square_magnitude() > 1e-4f)
+            out.set(o).normalize();
+    }
+    Fvector pole, perp;
+    pole.set(out).mul(m_grip_out).mad(fwd, -0.5f);
+    pole.y -= 0.35f;
+    perp.set(pole).mad(D, -pole.dotproduct(D));
+    if (perp.square_magnitude() < 1e-6f)
+        perp.set(out).mad(D, -out.dotproduct(D));
+    if (perp.square_magnitude() < 1e-6f)
+        return;
+    perp.normalize();
+    Fvector u, cur;
+    u.set(D).mul(ca).mad(perp, sa);
+    M.transform_dir(cur, s == 0 ? m_arm_axis[0] : m_larm_axis[0]);
+    cur.normalize_safe();
+    portal_turn_to(M, cur, u);
+    if (!m_grip_fore_ok[s])
+        return;
+    Fvector fl, f, E, w, fp, wp;
+    m_grip_fore_local[s].transform_dir(fl, s == 0 ? m_arm_axis[1] : m_larm_axis[1]);
+    M.transform_dir(f, fl);
+    E.set(M.c).mad(u, L1);
+    w.sub(T, E);
+    w.normalize_safe();
+    fp.set(f).mad(u, -f.dotproduct(u));
+    wp.set(w).mad(u, -w.dotproduct(u));
+    if (fp.magnitude() < 0.15f || wp.magnitude() < 0.15f) // (a straight arm has no bend plane)
+        return;
+    fp.normalize();
+    wp.normalize();
+    Fvector cx;
+    cx.crossproduct(fp, wp);
+    portal_turn_axes(M, u, atan2f(cx.dotproduct(u), fp.dotproduct(wp)));
+}
+
+// portal-mod E43: the forearm turned to the wrist's point (its animated turn kept for the next frame's roll)
+void CActor::portal_grip_fore(CBoneInstance* B, int s)
+{
+    Fmatrix& M = B->mTransform;
+    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    if (K && m_grip_bone[s][0] != BI_NONE)
+    {
+        Fmatrix ui;
+        ui.invert(K->LL_GetTransform(m_grip_bone[s][0]));
+        m_grip_fore_local[s].mul_43(ui, M);
+        m_grip_fore_ok[s] = true;
+    }
+    Fmatrix inv;
+    inv.invert(XFORM());
+    Fvector T, cur, w;
+    inv.transform_tiny(T, m_grip_pt[s]);
+    w.sub(T, M.c);
+    if (w.magnitude() < 0.03f)
+        return;
+    w.normalize();
+    M.transform_dir(cur, s == 0 ? m_arm_axis[1] : m_larm_axis[1]);
+    cur.normalize_safe();
+    portal_turn_to(M, cur, w);
+}
+
+// portal-mod E43: the hand turned: its knuckle axis along the script's finger way (none: along the forearm), its
+// knuckle normal toward the script's normal
+void CActor::portal_grip_hand(CBoneInstance* B, int s)
+{
+    if (m_grip_palm[s].square_magnitude() < EPS || m_grip_hand_ax[s].square_magnitude() < EPS)
+        return;
+    Fmatrix& M = B->mTransform;
+    Fmatrix inv;
+    inv.invert(XFORM());
+    Fvector a, n, b, bl;
+    if (m_grip_fing[s].square_magnitude() > EPS)
+        inv.transform_dir(a, m_grip_fing[s]);
+    else
+    {
+        IKinematics* K = smart_cast<IKinematics*>(Visual());
+        if (!K || m_grip_bone[s][1] == BI_NONE)
+            return;
+        K->LL_GetTransform(m_grip_bone[s][1]).transform_dir(a, s == 0 ? m_arm_axis[1] : m_larm_axis[1]);
+    }
+    inv.transform_dir(n, m_grip_palm[s]);
+    a.normalize_safe();
+    n.mad(a, -n.dotproduct(a));
+    if (n.square_magnitude() < 1e-6f)
+        return;
+    n.normalize();
+    b.crossproduct(n, a);
+    const Fvector& al = m_grip_hand_ax[s];
+    const Fvector& nl = m_grip_hand_n[s];
+    bl.crossproduct(nl, al);
+    M.i.set(a).mul(al.x).mad(n, nl.x).mad(b, bl.x);
+    M.j.set(a).mul(al.y).mad(n, nl.y).mad(b, bl.y);
+    M.k.set(a).mul(al.z).mad(n, nl.z).mad(b, bl.z);
+}
+
+// portal-mod E43: a finger joint curled about the hand's knuckle line (each joint of the finger adds its turn)
+void CActor::portal_grip_finger(CBoneInstance* B, int s)
+{
+    if (_abs(m_grip_curl[s]) < 1e-3f || m_grip_bone[s][2] == BI_NONE)
+        return;
+    IKinematics* K = smart_cast<IKinematics*>(Visual());
+    if (!K)
+        return;
+    Fvector bl, b;
+    bl.crossproduct(m_grip_hand_n[s], m_grip_hand_ax[s]);
+    K->LL_GetTransform(m_grip_bone[s][2]).transform_dir(b, bl);
+    if (b.square_magnitude() < EPS)
+        return;
+    b.normalize();
+    portal_turn_axes(B->mTransform, b, -m_grip_curl[s]); // (about (normal x axis) by -curl: toward the normal)
+}
+
+void CActor::GripBoneCallback(CBoneInstance* B)
+{
+    auto* g = static_cast<SPortalGrip*>(B->callback_param());
+    CActor* A = g->actor;
+    if (!A->m_tp_grip)
+        return;
+    if (g->kind == 0)
+        A->portal_grip_hand(B, g->side);
+    else
+        A->portal_grip_finger(B, g->side);
+}
+
+void CActor::portal_mod_tp_grip(bool on, const Fvector& r, const Fvector& l, float elbow_out)
+{
+    m_tp_grip = on;
+    m_grip_pt[0] = r;
+    m_grip_pt[1] = l;
+    m_grip_out = elbow_out;
+    if (on)
+        m_tp_dual = false;
+}
+
+void CActor::portal_mod_tp_grip_hands(const Fvector& rf, const Fvector& rn, const Fvector& lf, const Fvector& ln, float rc, float lc)
+{
+    m_grip_fing[0] = rf;
+    m_grip_palm[0] = rn;
+    m_grip_fing[1] = lf;
+    m_grip_palm[1] = ln;
+    m_grip_curl[0] = rc;
+    m_grip_curl[1] = lc;
+}
+
+void CActor::portal_mod_tp_dual(bool on, const Fvector& target)
+{
+    m_tp_dual = on;
+    m_tp_dual_target = target;
+}
+
+void CActor::portal_mod_arm_aim(const Fvector& target, float k)
+{
+    m_arm_aim_target = target;
+    m_arm_aim_k = k;
 }
 
 void STorsoWpn::Create(IKinematicsAnimated* K, LPCSTR base0, LPCSTR base1)

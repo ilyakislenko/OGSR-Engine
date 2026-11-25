@@ -20,6 +20,38 @@ void CScriptGameObject::set_invisible(bool val)
     val ? monster->manual_activate() : monster->manual_deactivate();
 }
 
+// portal-mod E33: a monster held by the script (the T-800 video: the bloodsucker caught by the throat)
+float CScriptGameObject::puppet_cycle(LPCSTR anim, float speed)
+{
+    CBaseMonster* monster = smart_cast<CBaseMonster*>(&object());
+    if (!monster)
+    {
+        ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "puppet_cycle: not a monster");
+        return 0.f;
+    }
+    return monster->control().animation().script_cycle(anim, speed);
+}
+
+void CScriptGameObject::puppet_pose(Fvector pos, float h, float p, float b)
+{
+    CCustomMonster* monster = smart_cast<CCustomMonster*>(&object());
+    if (!monster)
+    {
+        ai().script_engine().script_log(ScriptStorage::eLuaMessageTypeError, "puppet_pose: not a monster");
+        return;
+    }
+    monster->m_puppet = true;
+    monster->m_puppet_xform.setHPB(h, p, b);
+    monster->m_puppet_xform.c = pos;
+    monster->movement().m_body.current.yaw = monster->movement().m_body.target.yaw = -h;
+}
+
+void CScriptGameObject::puppet_off()
+{
+    if (CCustomMonster* monster = smart_cast<CCustomMonster*>(&object()))
+        monster->m_puppet = false;
+}
+
 void CScriptGameObject::set_manual_invisibility(bool val)
 {
     CAI_Bloodsucker* monster = smart_cast<CAI_Bloodsucker*>(&object());

@@ -256,6 +256,16 @@ public:
     // runtime positioning
     Fmatrix m_attach_offset;
     Fmatrix m_item_transform;
+    Fmatrix m_item_transform_dual; // portal-mod E26: its mirror image (dual wield)
+    // portal-mod E27: alternate fire - the other hand's own copy of the model, and the last shot it takes over
+    IKinematics* m_dual_model{};
+    MotionID m_dual_last_motion;
+    float m_dual_last_t{}, m_dual_last_speed{1.f}, m_dual_idle_at{};
+    u32 m_dual_upd_frame{u32(-1)};
+    void calc_dual_transform();
+    void dual_copy_sync(bool want);
+    MotionID dual_idle_motion();
+    bool dual_swapped() const;
 
     // props
     u32 m_upd_firedeps_frame;
@@ -266,6 +276,9 @@ public:
     void load(const shared_str& sect_name);
     void update(bool bForce);
     void setup_firedeps(firedeps& fd);
+    // portal-mod E31: the fire deps of the mirrored gun (dual wield, both at once: the left hand's flash, smoke, shell)
+    bool m_e31_mirror{};
+    void dual_mirror_firedeps(firedeps& fd);
     void render(u32 context_id, IRenderable* root);
     void render_item_ui();
     bool render_item_ui_query();

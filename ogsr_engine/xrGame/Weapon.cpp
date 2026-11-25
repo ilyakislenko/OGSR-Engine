@@ -13,6 +13,7 @@
 #include "xrserver_objects_alife_items.h"
 
 #include "actor.h"
+#include "portal_mod.h" // portal-mod E40
 #include "actoreffector.h"
 #include "level.h"
 
@@ -140,6 +141,15 @@ void CWeapon::UpdateXForm()
         Fmatrix mRes;
         Fvector R, D, N;
         D.sub(mL.c, mR.c);
+        // portal-mod E36: the two-gun pose - the left hand is off the fore-end: the gun from the right hand at the point
+        if (auto pA = smart_cast<CActor*>(E); pA && pA->m_tp_dual)
+        {
+            Fmatrix inv;
+            inv.invert(E->XFORM());
+            Fvector tgt;
+            inv.transform_tiny(tgt, pA->m_tp_dual_target);
+            D.sub(tgt, mR.c);
+        }
 
         if (fis_zero(D.magnitude()))
         {
@@ -170,7 +180,7 @@ void CWeapon::UpdateFireDependencies_internal()
 
         UpdateXForm();
 
-        if (GetHUDmode())
+        if (GetHUDmode() && !portal_mod::cine) // portal-mod E40: from a scene's camera - the world model's muzzle
         {
             HudItemData()->setup_firedeps(m_current_firedeps);
             VERIFY(_valid(m_current_firedeps.m_FireParticlesXForm));
@@ -199,7 +209,7 @@ void CWeapon::UpdateFireDependencies_internal()
 
 void CWeapon::ForceUpdateFireParticles()
 {
-    if (!GetHUDmode())
+    if (!GetHUDmode() || portal_mod::cine) // portal-mod E40
     { // update particlesXFORM real bullet direction
 
         if (!H_Parent())
@@ -1121,6 +1131,49 @@ void CWeapon::renderable_Render(u32 context_id, IRenderable* root)
     RenderLight();
 
     inherited::renderable_Render(context_id, root);
+
+    // portal-mod E36: the second gun of the two-gun pose - the same world model again in the left hand (the dsgraph
+    // copies the matrix, so a local one will do; portal-mod E40: the matrix from TpDualLeftXform)
+    Fmatrix m2;
+    if (!(root && root->renderable_HUD() && GetHUDmode()) && TpDualLeftXform(m2))
+    {
+        // portal-mod E37: the render graph takes a visual once a pass - the second copy let in (E26b's flag)
+        extern bool g_r_dsgraph_dup_ok;
+        g_r_dsgraph_dup_ok = true;
+        ::Render->add_Visual(context_id, root, Visual(), m2);
+        g_r_dsgraph_dup_ok = false;
+    }
+}
+
+// portal-mod E40 (E36/E39's matrix, moved out of renderable_Render): the second gun of the third-person two-gun pose
+bool CWeapon::TpDualLeftXform(Fmatrix& m2)
+{
+    auto pA = smart_cast<CActor*>(H_Parent());
+    if (!pA || !pA->m_tp_dual || !Visual() || IsHidden() || pA->m_tp_dual_hand[0] == BI_NONE || pA->m_tp_dual_hand[1] == BI_NONE)
+        return false;
+    IKinematics* K = smart_cast<IKinematics*>(pA->Visual());
+    if (!K)
+        return false;
+    // portal-mod E39: the right gun's mirror image across the chest's middle plane (axes reflected, the gun's own
+    // x flipped back to a proper turn), off the left hand as the right gun is off the right hand, reflected
+    Fmatrix inv, gm;
+    inv.invert(pA->XFORM());
+    gm.mul_43(inv, XFORM());
+    const Fmatrix& HR = K->LL_GetTransform(pA->m_tp_dual_hand[0]);
+    const Fmatrix& HL = K->LL_GetTransform(pA->m_tp_dual_hand[1]);
+    Fvector n;
+    n.set(1.f, 0.f, 0.f);
+    if (pA->m_tp_chest != BI_NONE)
+        K->LL_GetTransform(pA->m_tp_chest).transform_dir(n, pA->m_tp_chest_lat);
+    n.normalize_safe();
+    auto refl = [&n](const Fvector& v) { return Fvector().set(v).mad(n, -2.f * n.dotproduct(v)); };
+    Fvector i2 = refl(gm.i), j2 = refl(gm.j), k2 = refl(gm.k), c2;
+    i2.invert();
+    c2.add(HL.c, refl(Fvector().sub(gm.c, HR.c)));
+    Fmatrix m2m;
+    m2m.set(i2, j2, k2, c2);
+    m2.mul_43(pA->XFORM(), m2m);
+    return true;
 }
 
 void CWeapon::render_hud_mode(u32 context_id, IRenderable* root)
@@ -1959,7 +2012,7 @@ void CWeapon::OnDrawUI()
     }
 }
 
-bool CWeapon::IsHudModeNow() { return (HudItemData() != nullptr); }
+bool CWeapon::IsHudModeNow() { return (HudItemData() != nullptr) && !portal_mod::cine; } // portal-mod E40: world particles from a scene's camera
 
 bool CWeapon::unlimited_ammo()
 {

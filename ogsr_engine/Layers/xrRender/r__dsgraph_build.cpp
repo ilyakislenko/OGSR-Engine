@@ -207,9 +207,12 @@ ICF float CalcHudSSA(float& distSQ, Fvector& C, dxRender_Visual* V)
 }
 } // namespace
 
+// portal-mod E26b: raised by player_hud.cpp around the dual wield mirror copy - the same HUD model once more this pass
+bool g_r_dsgraph_dup_ok = false;
+
 void R_dsgraph_structure::r_dsgraph_insert_dynamic(IRenderable* root, dxRender_Visual* pVisual, Fmatrix& xform, Fvector& center)
 {
-    if (pVisual->getVisData().marker[context_id] == marker)
+    if (pVisual->getVisData().marker[context_id] == marker && !g_r_dsgraph_dup_ok)
         return;
     pVisual->getVisData().marker[context_id] = marker;
 

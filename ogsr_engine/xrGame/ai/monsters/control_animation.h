@@ -92,6 +92,10 @@ public:
     void freeze();
     void unfreeze();
 
+    // portal-mod E33: a cycle the script plays (a puppet monster) - only advanced here, never replaced
+    bool m_script_cycle{};
+    float script_cycle(LPCSTR name, float speed);
+
     // Services
     IC float motion_time(MotionID motion_id, IRenderVisual* visual);
 

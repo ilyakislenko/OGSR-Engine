@@ -612,6 +612,10 @@ void CCharacterPhysicsSupport::CreateSkeleton()
 }
 bool CCharacterPhysicsSupport::DoCharacterShellCollide()
 {
+    // portal-mod E34: a puppet's corpse (E33: the bloodsucker killed in the robot's hand) does not collide with
+    // characters - its ragdoll was thrown 0.4 m off the hand out of the actor's capsule the moment it was made
+    if (CCustomMonster* cm = smart_cast<CCustomMonster*>(&m_EntityAlife); cm && cm->m_puppet)
+        return false;
     if (m_eType == etStalker)
     {
         CAI_Stalker* OBJ = smart_cast<CAI_Stalker*>(&m_EntityAlife);

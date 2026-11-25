@@ -39,6 +39,12 @@
 #include "CharacterPhysicsSupport.h" // portal-mod
 #include "PHMovementControl.h"
 #include "PHSimpleCharacter.h" // portal-mod E17
+#include "CustomMonster.h" // portal-mod E24
+#include "PhysicsShellHolder.h" // portal-mod E41
+#include "PhysicsShell.h"
+#include "PHObject.h" // portal-mod E42
+#include "movement_manager.h"
+#include "detail_path_manager.h"
 
 // portal-mod: Lua side of the Portal 2 portals and the actor's velocity (momentum through portals)
 static void portal_set(int idx, Fvector pos, Fvector normal, Fvector up, float w, float h, float color, bool linked, float open)
@@ -101,11 +107,96 @@ static void portal_set_actor_position(Fvector p) // portal-mod E12
         a->portal_mod_place(p);
 }
 
+static void actor_arm_aim(Fvector p, float k) // portal-mod E34: the third-person body's right arm held out at p
+{
+    if (CActor* a = Actor())
+        a->portal_mod_arm_aim(p, k);
+}
+
+static void actor_tp_dual(bool on, Fvector p) // portal-mod E36: two guns in the third person, both arms out at p
+{
+    if (CActor* a = Actor())
+        a->portal_mod_tp_dual(on, p);
+}
+
+// portal-mod E43: a two-handed grip in the third person: the wrists on r and l (world), the elbows bent out by elbow_out
+static void actor_tp_grip(bool on, Fvector r, Fvector l, float elbow_out)
+{
+    if (CActor* a = Actor())
+        a->portal_mod_tp_grip(on, r, l, elbow_out);
+}
+
+// portal-mod E43: the grip's hands: knuckle axes (a zero vector: along the forearm), knuckle normals, finger curls (rad)
+static void actor_tp_grip_hands(Fvector rf, Fvector rn, Fvector lf, Fvector ln, float rc, float lc)
+{
+    if (CActor* a = Actor())
+        a->portal_mod_tp_grip_hands(rf, rn, lf, ln, rc, lc);
+}
+
 static void portal_fly_actor(Fvector v) // portal-mod E17: out of a portal at speed (flies, see CPHSimpleCharacter)
 {
     if (CActor* a = Actor())
         if (auto* ch = dynamic_cast<CPHSimpleCharacter*>(a->character_physics_support()->movement()->PHCharacter()))
             ch->portal_mod_fly(v);
+}
+
+// portal-mod E24: an NPC or a mutant put at pos moving at vel, as out of a portal (E8)
+static void portal_move_npc(u16 id, Fvector pos, Fvector vel)
+{
+    CCustomMonster* m = smart_cast<CCustomMonster*>(Level().Objects.net_Find(id));
+    if (!m || !m->g_Alive() || m->H_Parent() || !m->character_physics_support())
+        return;
+    CPHMovementControl* mc = m->character_physics_support()->movement();
+    if (!mc || !mc->CharacterExist())
+        return;
+    Fmatrix F = m->XFORM();
+    F.c = pos;
+    m->XFORM().set(F);
+    mc->EnableCharacter();
+    mc->SetPosition(pos);
+    mc->SetVelocity(vel);
+    m->movement().detail().make_inactual();
+    if (m->animation_movement_controlled())
+        m->destroy_anim_mov_ctrl();
+}
+
+// portal-mod E41: a physics object (a scene's prop) held at pos, its +z along dir and +y toward up: the shell's bodies
+// put there with the interpolation restarted, the velocities zeroed; collide false lets the actor through it
+static void portal_pose_object(u16 id, Fvector pos, Fvector dir, Fvector up, bool collide)
+{
+    auto* o = smart_cast<CPhysicsShellHolder*>(Level().Objects.net_Find(id));
+    if (!o || o->H_Parent())
+        return;
+    CPhysicsShell* sh = o->PPhysicsShell();
+    if (!sh || !sh->isActive())
+        return;
+    Fvector k = dir, i, j;
+    if (k.square_magnitude() < EPS)
+        return;
+    k.normalize();
+    i.crossproduct(up, k);
+    if (i.square_magnitude() < EPS)
+        i.crossproduct(Fvector().set(0.f, 0.f, 1.f), k);
+    if (i.square_magnitude() < EPS)
+        i.crossproduct(Fvector().set(1.f, 0.f, 0.f), k);
+    i.normalize();
+    j.crossproduct(k, i);
+    Fmatrix m;
+    m.set(i, j, k, pos);
+    // portal-mod E42: out of the spatial alone, the prop's own collision pass still found the actor and its fixed body
+    // shoved it - the collide-class bits (CPHCollideValidator's private cbNCClassDynamic 1 << 3, cbNCClassCharacter
+    // 1 << 5) make it ignore characters and dynamic bodies too
+    constexpr CLClassBits ignore_bits = (1u << 3) | (1u << 5);
+    if (auto* pho = dynamic_cast<CPHObject*>(sh))
+        pho->collide_class_bits().set(ignore_bits, !collide);
+    if (collide)
+        sh->EnableCollision();
+    else
+        sh->DisableCollision();
+    sh->SetGlTransformDynamic(m);
+    sh->set_LinearVel(Fvector().set(0.f, 0.f, 0.f));
+    sh->set_AngularVel(Fvector().set(0.f, 0.f, 0.f));
+    o->XFORM().set(m);
 }
 
 static void set_actor_velocity(Fvector v)
@@ -674,6 +765,10 @@ float add_cam_effector2(LPCSTR fn, int id, bool cyclic, LPCSTR cb_func)
 
 void remove_cam_effector(int id) { Actor()->Cameras().RemoveCamEffector((ECamEffectorType)id); }
 
+// portal-mod E21: a scene's camera, set from a script every frame; absolute and applied last (AbsolutePositioning
+// puts it at the front of the list, processed last); it drops out by itself once level.cine_cam_off() is called
+static Fvector pm_cine_p{}, pm_cine_d{0.f, 0.f, 1.f};
+static float pm_cine_fov{};
 float get_snd_volume() { return psSoundVFactor; }
 
 void set_snd_volume(float v)
@@ -1330,6 +1425,14 @@ static void bot_move(int fwd, int strafe, bool sprint, bool jump, bool crouch)
     g_bot_move_flags = f;
     g_bot_move_until = Device.dwTimeGlobal + 300;
 }
+// portal-mod E26: dual wield (player_hud.cpp)
+extern bool g_hud_dual;
+static void hud_dual(bool on) { g_hud_dual = on; }
+static bool hud_dual_on() { return g_hud_dual; }
+// portal-mod E27: alternate fire (player_hud.cpp)
+extern bool g_hud_dual_alt, g_hud_dual_swap;
+static void hud_dual_alt(bool on) { g_hud_dual_alt = on; }
+static bool hud_dual_swapped() { return g_hud_dual_swap; }
 // stalker-bot B2: all the actor's tasks (scripts only see the active one)
 #include "GameTaskManager.h"
 #include "GameTask.h"
@@ -1589,7 +1692,14 @@ void CLevel::script_register(lua_State* L)
             def("advance_game_time", &AdvanceGameTime),
 
             def("portal_set", &portal_set), def("portal_clear", &portal_clear), def("portal_view_roll", &portal_view_roll), def("ray_query_normal", &ray_query_normal), // portal-mod
-            def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position),
+            def("actor_velocity", &actor_velocity), def("portal_set_actor_position", &portal_set_actor_position), def("portal_fly_actor", &portal_fly_actor), def("portal_move_npc", &portal_move_npc), // portal-mod E24
+            def("hud_dual", &hud_dual), def("hud_dual_on", &hud_dual_on), // portal-mod E26
+            def("hud_dual_alt", &hud_dual_alt), def("hud_dual_swapped", &hud_dual_swapped), // portal-mod E27
+            def("cine_cam", &cine_cam), def("cine_cam_off", &cine_cam_off), def("cine_cam_on", &cine_cam_on), // portal-mod E21
+            def("actor_arm_aim", &actor_arm_aim), // portal-mod E34
+            def("actor_tp_dual", &actor_tp_dual), // portal-mod E36
+            def("portal_pose_object", &portal_pose_object), // portal-mod E41
+            def("actor_tp_grip", &actor_tp_grip), def("actor_tp_grip_hands", &actor_tp_grip_hands), // portal-mod E43
             def("bot_path", &bot_path), def("bot_exit_to", &bot_exit_to), def("bot_exits", &bot_exits), /* stalker-bot B8 */ def("bot_take_body_info", &bot_take_body_info), /* stalker-bot B9 */ def("bot_actor_input", &bot_actor_input), def("bot_actor_state", &bot_actor_state), /* stalker-bot B12 */ def("bot_level_change_auto", &bot_level_change_auto), // stalker-bot B1
             def("bot_talk", &bot_talk), def("bot_talk_select", &bot_talk_select), def("bot_move", &bot_move), def("bot_tasks", &bot_tasks), // stalker-bot B2
             def("bot_trade_price", &bot_trade_price), def("bot_trade", &bot_trade), // stalker-bot B4

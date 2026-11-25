@@ -212,9 +212,20 @@ void render_item(u32 context_id, const T& item)
     //     cmd_list.set_CullMode(cullMode == CULL_CW ? CULL_CCW : CULL_CW);
     // }
 
+    // portal-mod E26: a mirrored HUD item (dual wield) has its winding turned over: cull the other face for it
+    const Fmatrix& M = item.second.Matrix;
+    Fvector cr;
+    cr.crossproduct(M.i, M.j);
+    const bool flipped = cr.dotproduct(M.k) < 0.f;
+    if (flipped)
+        dsgraph.cmd_list.set_CullMode(CULL_CW);
+
     const float lod = calcLOD(item.first);
     dsgraph.cmd_list.lod.set_lod(lod); // !!!
     V->Render(dsgraph.cmd_list, lod, dsgraph.phase == CRender::PHASE_SMAP);
+
+    if (flipped)
+        dsgraph.cmd_list.set_CullMode(CULL_CCW);
 }
 
 template <class T>

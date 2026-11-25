@@ -191,11 +191,12 @@ void CHelicopter::Hit(SHit* pHDS)
     if (HDS.ignore_flag)
         return;
 
-    bonesIt It = m_hitBones.find(pHDS->bone());
-    if (It != m_hitBones.end() && pHDS->hit_type == ALife::eHitTypeFireWound)
+    // portal-mod E29: the damage, the bone and the type from the callback's copy (a script's change of power lands)
+    bonesIt It = m_hitBones.find(HDS.bone());
+    if (It != m_hitBones.end() && HDS.hit_type == ALife::eHitTypeFireWound)
     {
         float curHealth = GetfHealth();
-        curHealth -= pHDS->damage() * It->second * 1000.0f;
+        curHealth -= HDS.damage() * It->second * 1000.0f;
 
         SetfHealth(curHealth);
 #ifdef DEBUG
@@ -205,8 +206,8 @@ void CHelicopter::Hit(SHit* pHDS)
     }
     else
     {
-        float hit_power = pHDS->damage();
-        hit_power *= m_HitTypeK[pHDS->hit_type];
+        float hit_power = HDS.damage(); // portal-mod E29
+        hit_power *= m_HitTypeK[HDS.hit_type];
 
         if (hit_power > 0.f)
         {

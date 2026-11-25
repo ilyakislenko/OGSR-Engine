@@ -17,6 +17,8 @@
 #include "../xr_3da/CustomHUD.h"
 #include "WeaponKnife.h"
 #include "WeaponBinoculars.h"
+#include "portal_mod.h" // portal-mod E28
+#include "../xr_3da/CameraBase.h" // portal-mod E28
 
 constexpr float VEL_MAX = 10.f;
 constexpr float VEL_A_MAX = 10.f;
@@ -64,6 +66,34 @@ void CActor::g_fireParams(CHudItem* pHudItem, Fvector& fire_pos, Fvector& fire_d
 {
     fire_dir = Cameras().Direction();
     fire_pos = Cameras().Position();
+    if (portal_mod::cine && cam_Active()) // portal-mod E28: a scene camera on - the shot leaves from the actor's own eyes
+    {
+        fire_dir = cam_Active()->Direction();
+        fire_pos = cam_Active()->Position();
+        // portal-mod E40: a gun's bullet leaves its world model's muzzle, toward the point the eyes look at (the first
+        // thing on the eye line from 1.5 m out - past the gun in the hands - 300 m at most): the tracer starts at the
+        // barrel, the hit lands where the scene aims
+        if (auto w = smart_cast<CWeapon*>(pHudItem); w && !for_cursor && !smart_cast<CWeaponKnife*>(pHudItem) &&
+            !smart_cast<CMissile*>(pHudItem) && !smart_cast<CWeaponBinoculars*>(pHudItem))
+        {
+            float range = 300.f;
+            Fvector from;
+            from.mad(fire_pos, fire_dir, 1.5f);
+            collide::rq_result RQ;
+            if (Level().ObjectSpace.RayPick(from, fire_dir, range, collide::rqtBoth, RQ, this))
+                range = RQ.range;
+            Fvector aim, d2;
+            aim.mad(from, fire_dir, range);
+            const Fvector mz = w->get_LastFP();
+            d2.sub(aim, mz);
+            if (d2.magnitude() > 0.3f)
+            {
+                d2.normalize();
+                fire_pos = mz;
+                fire_dir = d2;
+            }
+        }
+    }
 
     if (smart_cast<CMissile*>(pHudItem) && !for_cursor)
     {

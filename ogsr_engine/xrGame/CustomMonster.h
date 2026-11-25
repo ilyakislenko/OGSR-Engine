@@ -248,6 +248,10 @@ public:
     virtual void on_restrictions_change();
     virtual LPCSTR visual_name(CSE_Abstract* server_entity);
 
+    // portal-mod E33: the script holds the body (a puppet): its whole transform each frame
+    bool m_puppet{};
+    Fmatrix m_puppet_xform;
+
 private:
     bool m_already_dead;
 

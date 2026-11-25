@@ -316,6 +316,125 @@ void CActor::SetCallbacks()
     V->LL_GetBoneInstance(u16(spine1_bone)).set_callback(bctCustom, Spin1Callback, this);
     V->LL_GetBoneInstance(u16(shoulder_bone)).set_callback(bctCustom, ShoulderCallback, this);
     V->LL_GetBoneInstance(u16(head_bone)).set_callback(bctCustom, HeadCallback, this);
+    // portal-mod E34: the right arm, aimed by the script (off while m_arm_aim_k is 0)
+    const u16 ua = V->LL_BoneID("bip01_r_upperarm"), fa = V->LL_BoneID("bip01_r_forearm"), hb = V->LL_BoneID("bip01_r_hand");
+    if (ua != BI_NONE && fa != BI_NONE && hb != BI_NONE)
+    {
+        m_arm_axis[0].set(V->LL_GetData(fa).bind_transform.c);
+        m_arm_axis[1].set(V->LL_GetData(hb).bind_transform.c);
+        m_arm_axis[0].normalize_safe();
+        m_arm_axis[1].normalize_safe();
+        V->LL_GetBoneInstance(ua).set_callback(bctCustom, ArmAimUpperCallback, this);
+        V->LL_GetBoneInstance(fa).set_callback(bctCustom, ArmAimForeCallback, this);
+    }
+    // portal-mod E38: the chest's forward in each spine bone's own frame - the bind pose's, square to the shoulders
+    // (right upper arm - left upper arm, crossed with up), turned into the bone's frame by its model-to-bone matrix
+    {
+        const u16 lu = V->LL_BoneID("bip01_l_upperarm"), ru = V->LL_BoneID("bip01_r_upperarm");
+        const u16 sb[4] = {spine0_bone, spine1_bone, shoulder_bone, head_bone};
+        if (lu != BI_NONE && ru != BI_NONE)
+        {
+            Fmatrix bl, br;
+            bl.invert(V->LL_GetData(lu).m2b_transform);
+            br.invert(V->LL_GetData(ru).m2b_transform);
+            Fvector side, up_, f;
+            side.sub(br.c, bl.c);
+            up_.set(0.f, 1.f, 0.f);
+            f.crossproduct(side, up_);
+            f.y = 0.f;
+            f.normalize_safe();
+            // which way is the front: where the feet point, foot -> toe (take 23: +z taken for it turned the chest and
+            // the head round to the back - the skeleton's bind pose faces -z)
+            const u16 ft = V->LL_BoneID("bip01_l_foot"), te = V->LL_BoneID("bip01_l_toe0");
+            Fvector toe_dir;
+            toe_dir.set(0.f, 0.f, -1.f);
+            if (ft != BI_NONE && te != BI_NONE)
+            {
+                Fmatrix bf, bt;
+                bf.invert(V->LL_GetData(ft).m2b_transform);
+                bt.invert(V->LL_GetData(te).m2b_transform);
+                toe_dir.sub(bt.c, bf.c);
+                Msg("portal-mod E38: foot -> toe (bind) [%.2f %.2f %.2f]", toe_dir.x, toe_dir.y, toe_dir.z);
+            }
+            if (f.x * toe_dir.x + f.z * toe_dir.z < 0.f)
+                f.invert();
+            for (int i = 0; i < 4; ++i)
+                if (sb[i] != BI_NONE)
+                    V->LL_GetData(sb[i]).m2b_transform.transform_dir(m_spine_fwd[i], f);
+            Msg("portal-mod E38: chest forward (bind) [%.2f %.2f %.2f]", f.x, f.y, f.z);
+        }
+    }
+    // portal-mod E36: the left arm for the two-gun pose; both hands for the second gun's place
+    const u16 lua = V->LL_BoneID("bip01_l_upperarm"), lfa = V->LL_BoneID("bip01_l_forearm"), lhb = V->LL_BoneID("bip01_l_hand");
+    m_tp_dual_hand[0] = hb;
+    m_tp_dual_hand[1] = lhb;
+    if (lua != BI_NONE && lfa != BI_NONE && lhb != BI_NONE)
+    {
+        m_larm_axis[0].set(V->LL_GetData(lfa).bind_transform.c);
+        m_larm_axis[1].set(V->LL_GetData(lhb).bind_transform.c);
+        m_larm_axis[0].normalize_safe();
+        m_larm_axis[1].normalize_safe();
+        V->LL_GetBoneInstance(lua).set_callback(bctCustom, LArmAimUpperCallback, this);
+        V->LL_GetBoneInstance(lfa).set_callback(bctCustom, LArmAimForeCallback, this);
+    }
+    // portal-mod E39: the left arm's bones with a right twin mirror it while the two-gun pose is on (over E36's aim)
+    m_tp_mirror_n = 0;
+    m_tp_chest = V->LL_BoneID("bip01_spine2");
+    if (m_tp_chest != BI_NONE)
+    {
+        V->LL_GetData(m_tp_chest).m2b_transform.transform_dir(m_tp_chest_lat, Fvector().set(1.f, 0.f, 0.f));
+        m_tp_chest_lat.normalize_safe();
+        Fmatrix H0;
+        H0.identity();
+        H0.i.x = -1.f;
+        float worst = 1.f;
+        for (u16 id = 0; id < V->LL_BoneCount() && m_tp_mirror_n < 32; ++id)
+        {
+            const char* nm = V->LL_BoneName(id);
+            if (!nm || strncmp(nm, "bip01_l_", 8) != 0)
+                continue;
+            if (!strstr(nm, "clavicle") && !strstr(nm, "upperarm") && !strstr(nm, "forearm") && !strstr(nm, "hand") && !strstr(nm, "finger"))
+                continue;
+            string128 rn;
+            xr_sprintf(rn, "bip01_r_%s", nm + 8);
+            const u16 r = V->LL_BoneID(rn);
+            if (r == BI_NONE)
+                continue;
+            Fmatrix bl, q0, q;
+            bl.invert(V->LL_GetData(id).m2b_transform);
+            q0.mul_43(V->LL_GetData(r).m2b_transform, H0);
+            q.mul_43(q0, bl);
+            for (Fvector* c : {&q.i, &q.j, &q.k}) // snapped to the nearest signed axis
+            {
+                const float ax = _abs(c->x), ay = _abs(c->y), az = _abs(c->z);
+                worst = _min(worst, _max(ax, _max(ay, az)));
+                if (ax >= ay && ax >= az)
+                    c->set(c->x > 0.f ? 1.f : -1.f, 0.f, 0.f);
+                else if (ay >= az)
+                    c->set(0.f, c->y > 0.f ? 1.f : -1.f, 0.f);
+                else
+                    c->set(0.f, 0.f, c->z > 0.f ? 1.f : -1.f);
+            }
+            q.c.set(0.f, 0.f, 0.f);
+            SPortalMirror& m = m_tp_mirror[m_tp_mirror_n++];
+            m.actor = this;
+            m.l = id;
+            m.r = r;
+            m.q = q;
+            V->LL_GetBoneInstance(id).set_callback(bctCustom, TpMirrorCallback, &m);
+            Msg("portal-mod E39: %s <- %s q [%+.0f %+.0f %+.0f] [%+.0f %+.0f %+.0f] [%+.0f %+.0f %+.0f]", nm, rn, q.i.x, q.i.y, q.i.z,
+                q.j.x, q.j.y, q.j.z, q.k.x, q.k.y, q.k.z);
+        }
+        Fmatrix hl, hr;
+        if (lhb != BI_NONE && hb != BI_NONE)
+        {
+            hl.invert(V->LL_GetData(lhb).m2b_transform);
+            hr.invert(V->LL_GetData(hb).m2b_transform);
+            Msg("portal-mod E39: %u mirrored bones, worst axis fit %.3f; bind hands L [%.3f %.3f %.3f] R [%.3f %.3f %.3f], chest axis [%.2f %.2f %.2f]",
+                m_tp_mirror_n, worst, hl.c.x, hl.c.y, hl.c.z, hr.c.x, hr.c.y, hr.c.z, m_tp_chest_lat.x, m_tp_chest_lat.y, m_tp_chest_lat.z);
+        }
+    }
+    portal_grip_setup(V); // portal-mod E43
 }
 void CActor::ResetCallbacks()
 {
@@ -329,6 +448,85 @@ void CActor::ResetCallbacks()
     V->LL_GetBoneInstance(u16(spine1_bone)).reset_callback();
     V->LL_GetBoneInstance(u16(shoulder_bone)).reset_callback();
     V->LL_GetBoneInstance(u16(head_bone)).reset_callback();
+    for (const char* b : {"bip01_r_upperarm", "bip01_r_forearm", "bip01_l_upperarm", "bip01_l_forearm"}) // portal-mod E34, E36
+        if (const u16 id = V->LL_BoneID(b); id != BI_NONE)
+            V->LL_GetBoneInstance(id).reset_callback();
+    for (u16 i = 0; i < m_tp_mirror_n; ++i) // portal-mod E39
+        if (m_tp_mirror[i].l < V->LL_BoneCount())
+            V->LL_GetBoneInstance(m_tp_mirror[i].l).reset_callback();
+    m_tp_mirror_n = 0;
+    for (u16 i = 0; i < m_grip_cb_n; ++i) // portal-mod E43
+        if (m_grip_cb[i].bone < V->LL_BoneCount())
+            V->LL_GetBoneInstance(m_grip_cb[i].bone).reset_callback();
+    m_grip_cb_n = 0;
+}
+
+// portal-mod E43: the grip's bones: the arms' lengths, the hands' knuckle frames, the right hand's and fingers' callbacks
+// (the left ones are E39's mirror bones - its callback hands them over)
+void CActor::portal_grip_setup(IKinematics* V)
+{
+    m_grip_cb_n = 0;
+    for (int s = 0; s < 2; ++s)
+    {
+        const char* sd = s == 0 ? "r" : "l";
+        string64 nm;
+        auto id = [&](const char* b) {
+            xr_sprintf(nm, "bip01_%s_%s", sd, b);
+            return V->LL_BoneID(nm);
+        };
+        m_grip_bone[s][0] = id("upperarm");
+        m_grip_bone[s][1] = id("forearm");
+        m_grip_bone[s][2] = id("hand");
+        const char* fn[6] = {"finger1", "finger11", "finger12", "finger2", "finger21", "finger22"};
+        for (int k = 0; k < 6; ++k)
+            m_grip_fing_bone[s][k] = id(fn[k]);
+        m_grip_len[s][0] = m_grip_len[s][1] = 0.f;
+        m_grip_hand_ax[s].set(0.f, 0.f, 0.f);
+        m_grip_fore_ok[s] = false;
+        const u16 ua = m_grip_bone[s][0], fa = m_grip_bone[s][1], hb = m_grip_bone[s][2];
+        if (ua == BI_NONE || fa == BI_NONE || hb == BI_NONE)
+            continue;
+        m_grip_len[s][0] = V->LL_GetData(fa).bind_transform.c.magnitude();
+        m_grip_len[s][1] = V->LL_GetData(hb).bind_transform.c.magnitude();
+        const u16 f1 = m_grip_fing_bone[s][0], f2 = m_grip_fing_bone[s][3];
+        if (f1 != BI_NONE && f2 != BI_NONE && V->LL_GetData(f1).GetParentID() == hb && V->LL_GetData(f2).GetParentID() == hb)
+        {
+            const Fvector& c1 = V->LL_GetData(f1).bind_transform.c;
+            const Fvector& c2 = V->LL_GetData(f2).bind_transform.c;
+            Fvector ax, lat, n;
+            ax.add(c1, c2).mul(0.5f);
+            const float knuckles = ax.magnitude();
+            ax.normalize_safe();
+            lat.sub(c2, c1);
+            n.crossproduct(ax, lat);
+            n.normalize_safe();
+            m_grip_hand_ax[s] = ax;
+            m_grip_hand_n[s] = n;
+            Msg("portal-mod E43: %s arm %.3f + %.3f m, wrist -> knuckles %.3f m, finger1 %.3f + %.3f, knuckle axis [%.2f %.2f %.2f] normal [%.2f %.2f %.2f]",
+                sd, m_grip_len[s][0], m_grip_len[s][1], knuckles,
+                m_grip_fing_bone[s][1] != BI_NONE ? V->LL_GetData(m_grip_fing_bone[s][1]).bind_transform.c.magnitude() : 0.f,
+                m_grip_fing_bone[s][2] != BI_NONE ? V->LL_GetData(m_grip_fing_bone[s][2]).bind_transform.c.magnitude() : 0.f,
+                ax.x, ax.y, ax.z, n.x, n.y, n.z);
+        }
+        else
+            Msg("! portal-mod E43: %s hand: finger1/finger2 not on the hand - no hand turn", sd);
+        if (s == 0) // the right hand and fingers (no other callback on them)
+        {
+            auto add = [&](u16 b, u8 kind) {
+                if (b == BI_NONE || m_grip_cb_n >= 8)
+                    return;
+                SPortalGrip& g = m_grip_cb[m_grip_cb_n++];
+                g.actor = this;
+                g.bone = b;
+                g.side = 0;
+                g.kind = kind;
+                V->LL_GetBoneInstance(b).set_callback(bctCustom, GripBoneCallback, &g);
+            };
+            add(hb, 0);
+            for (int k = 0; k < 6; ++k)
+                add(m_grip_fing_bone[0][k], 1);
+        }
+    }
 }
 
 void CActor::OnChangeVisual()

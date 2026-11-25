@@ -237,6 +237,9 @@ void attachable_hud_item::update(bool bForce)
 
     m_parent->calc_transform(m_attach_place_idx, m_attach_offset, m_item_transform);
     m_upd_firedeps_frame = Device.dwFrame;
+    extern bool g_hud_dual; // portal-mod E27 (defined below)
+    if (g_hud_dual && m_attach_place_idx == 0)
+        calc_dual_transform(); // portal-mod E27
 
     IKinematicsAnimated* ka = m_model->dcast_PKinematicsAnimated();
     if (ka)
@@ -247,6 +250,14 @@ void attachable_hud_item::update(bool bForce)
     }
 }
 
+// portal-mod E31: setup_firedeps() through the mirror transform
+void attachable_hud_item::dual_mirror_firedeps(firedeps& fd)
+{
+    m_e31_mirror = true;
+    setup_firedeps(fd);
+    m_e31_mirror = false;
+}
+
 player_hud_motion* attachable_hud_item::find_motion(const shared_str& name)
 { 
     return m_hand_motions.find_motion(name); 
@@ -255,6 +266,7 @@ player_hud_motion* attachable_hud_item::find_motion(const shared_str& name)
 void attachable_hud_item::setup_firedeps(firedeps& fd)
 {
     update(false);
+    const Fmatrix& m_item_transform = (dual_swapped() || m_e31_mirror) ? m_item_transform_dual : this->m_item_transform; // portal-mod E27, E31
     // fire point&direction
     if (m_measures.m_prop_flags.test(hud_item_measures::e_fire_point))
     {
@@ -310,9 +322,173 @@ void attachable_hud_item::setup_firedeps(firedeps& fd)
 
 bool attachable_hud_item::need_renderable() { return m_parent_hud_item->need_renderable(); }
 
+// portal-mod E26: dual wield - the main slot's item drawn again mirrored, its left arm folded away
+bool g_hud_dual = false;
+
+static void hud_dual_fold(CBoneInstance* B)
+{
+    const Fvector p = B->mTransform.c;
+    B->mTransform.scale(0.0001f, 0.0001f, 0.0001f);
+    B->mTransform.c = p;
+}
+
+static Fvector hud_dual_reflect(const Fvector& v, const Fvector& n)
+{
+    Fvector r;
+    r.mad(v, n, -2.f * v.dotproduct(n));
+    return r;
+}
+
+// portal-mod E27: alternate fire (two pistols in turn): the other hand has its own copy, the live model swaps hands
+bool g_hud_dual_alt = false;
+bool g_hud_dual_swap = false;
+
+static void hud_dual_fold_set(IKinematics* k, bool on)
+{
+    const u16 lc = k->LL_BoneID("bip01_l_clavicle");
+    if (lc == BI_NONE)
+        return;
+    CBoneInstance& bi = k->LL_GetBoneInstance(lc);
+    if (on && bi.callback() != hud_dual_fold)
+        bi.set_callback(bctCustom, hud_dual_fold, nullptr, FALSE);
+    else if (!on && bi.callback() == hud_dual_fold)
+        bi.reset_callback();
+}
+
+// plays motion m on every partition from t seconds of real time in (t < 0: from the start); returns the real seconds left
+static float hud_dual_play(IKinematics* k, const MotionID& m, float speed, float t)
+{
+    IKinematicsAnimated* ka = k->dcast_PKinematicsAnimated();
+    if (!ka || !m.valid())
+        return 0.f;
+    float left = 0.f;
+    const u16 pc = ka->partitions().count();
+    for (u16 pid = 0; pid < pc; ++pid)
+    {
+        CBlend* B = ka->PlayCycle(pid, m, FALSE);
+        if (!B)
+            continue;
+        B->speed *= speed;
+        if (t > 0.f)
+            B->timeCurrent = _min(t * B->speed, _max(0.f, B->timeTotal - 0.01f));
+        if (B->speed > 0.f)
+            left = _max(left, (B->timeTotal - B->timeCurrent) / B->speed);
+    }
+    k->CalculateBones_Invalidate();
+    return left;
+}
+
+bool attachable_hud_item::dual_swapped() const { return g_hud_dual && g_hud_dual_alt && g_hud_dual_swap && m_attach_place_idx == 0 && m_dual_model; }
+
+void attachable_hud_item::calc_dual_transform()
+{
+    // the HUD is drawn with the camera at the origin: reflect across the plane through it normal to its right
+    Fvector n = Device.vCameraRight;
+    n.normalize_safe();
+    m_item_transform_dual.i = hud_dual_reflect(m_item_transform.i, n);
+    m_item_transform_dual.j = hud_dual_reflect(m_item_transform.j, n);
+    m_item_transform_dual.k = hud_dual_reflect(m_item_transform.k, n);
+    m_item_transform_dual.c = hud_dual_reflect(m_item_transform.c, n);
+    m_item_transform_dual._14_ = m_item_transform._14_;
+    m_item_transform_dual._24_ = m_item_transform._24_;
+    m_item_transform_dual._34_ = m_item_transform._34_;
+    m_item_transform_dual._44_ = m_item_transform._44_;
+}
+
+MotionID attachable_hud_item::dual_idle_motion()
+{
+    MotionID m;
+    IKinematicsAnimated* ka = m_dual_model ? m_dual_model->dcast_PKinematicsAnimated() : nullptr;
+    if (!ka)
+        return m;
+    for (const char* alias : {"anm_idle", "anim_idle"})
+    {
+        player_hud_motion* anm = m_hand_motions.find_motion(alias);
+        if (anm && anm->m_animations.size())
+        {
+            m = ka->ID_Cycle_Safe(anm->m_animations[0].name);
+            if (m.valid())
+                return m;
+        }
+    }
+    return ka->ID_Cycle_Safe("idle");
+}
+
+// the copy made (idle, its left arm folded) or let go; once a frame its animation goes on
+void attachable_hud_item::dual_copy_sync(bool want)
+{
+    if (want && !m_dual_model && !m_has_separated_hands)
+    {
+        ::Render->hud_loading = true;
+        m_dual_model = smart_cast<IKinematics*>(::Render->model_Create(m_visual_name.c_str()));
+        ::Render->hud_loading = false;
+        if (m_dual_model)
+        {
+            m_dual_model->dcast_RenderVisual()->MarkAsHot(false);
+            hud_dual_fold_set(m_dual_model, true);
+            hud_dual_play(m_dual_model, dual_idle_motion(), 1.f, -1.f);
+            m_dual_idle_at = 0.f;
+        }
+        Msg("portal-mod E27: dual copy of [%s] %s", m_visual_name.c_str(), m_dual_model ? "made" : "FAILED");
+    }
+    else if (!want && m_dual_model)
+    {
+        IRenderVisual* v = m_dual_model->dcast_RenderVisual();
+        ::Render->model_Delete(v);
+        m_dual_model = nullptr;
+        m_dual_last_motion.invalidate();
+        g_hud_dual_swap = false;
+    }
+    if (m_dual_model && m_dual_upd_frame != Device.dwFrame)
+    {
+        m_dual_upd_frame = Device.dwFrame;
+        if (m_dual_idle_at > 0.f && Device.fTimeGlobal >= m_dual_idle_at)
+        {
+            hud_dual_play(m_dual_model, dual_idle_motion(), 1.f, -1.f);
+            m_dual_idle_at = 0.f;
+        }
+        // portal-mod E30: the copy hides what the live model hides (the addon bones: scope, silencer, launcher)
+        const u16 bc = m_model->LL_BoneCount();
+        if (m_dual_model->LL_BoneCount() == bc)
+        {
+            for (u16 b = 0; b < bc; ++b)
+            {
+                const BOOL v = m_model->LL_GetBoneVisible(b);
+                if (m_dual_model->LL_GetBoneVisible(b) != v)
+                    m_dual_model->LL_SetBoneVisible(b, v, FALSE);
+            }
+        }
+        IKinematicsAnimated* ka = m_dual_model->dcast_PKinematicsAnimated();
+        if (ka)
+            ka->UpdateTracks();
+        m_dual_model->CalculateBones_Invalidate();
+        m_dual_model->CalculateBones(TRUE);
+    }
+}
+
 void attachable_hud_item::render(u32 context_id, IRenderable* root)
 {
-    ::Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), m_item_transform);
+    const bool dual = g_hud_dual && m_attach_place_idx == 0;
+    hud_dual_fold_set(m_model, dual);
+    dual_copy_sync(dual && g_hud_dual_alt); // portal-mod E27
+    if (dual)
+        calc_dual_transform();
+    const bool sw = dual_swapped();
+    static int e27_drawn = -1;
+    if (dual && int(sw) != e27_drawn)
+    {
+        e27_drawn = int(sw);
+        Msg("portal-mod E27: drawn %s, frame %u", sw ? "swapped" : "as is", Device.dwFrame);
+    }
+    ::Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), sw ? m_item_transform_dual : m_item_transform);
+    if (dual)
+    {
+        IKinematics* other = m_dual_model ? m_dual_model : m_model;
+        extern bool g_r_dsgraph_dup_ok; // portal-mod E26b: the render graph takes a visual once a pass otherwise
+        g_r_dsgraph_dup_ok = true;
+        ::Render->add_Visual(context_id, root, other->dcast_RenderVisual(), sw ? m_item_transform : m_item_transform_dual);
+        g_r_dsgraph_dup_ok = false;
+    }
     debug_draw_firedeps();
     m_parent_hud_item->render_hud_mode(context_id, root);
 }
@@ -550,6 +726,7 @@ void hud_item_measures::load(const shared_str& sect_name, IKinematics* K)
 
 attachable_hud_item::~attachable_hud_item()
 {
+    dual_copy_sync(false); // portal-mod E27
     IRenderVisual* v = m_model->dcast_RenderVisual();
     ::Render->model_Delete(v);
     m_model = nullptr;
@@ -639,6 +816,23 @@ u32 attachable_hud_item::anim_play(const shared_str& anm_name_b, BOOL bMixIn, co
             M2 = ka->ID_Cycle_Safe("idle");
         
         R_ASSERT3(M2.valid(), "model has no motion [idle] ", m_visual_name.c_str());
+
+        // portal-mod E27: a shot in alternate fire - the gun that fired last goes on in the copy from where it was, this
+        // one fires from the other hand
+        const bool e27_shot = strstr(anm_name_b.c_str(), "shot") || strstr(anm_name_b.c_str(), "shoot");
+        if (e27_shot && m_dual_model && g_hud_dual && g_hud_dual_alt && m_attach_place_idx == 0)
+        {
+            if (m_dual_last_motion.valid())
+                m_dual_idle_at = Device.fTimeGlobal + hud_dual_play(m_dual_model, m_dual_last_motion, m_dual_last_speed, Device.fTimeGlobal - m_dual_last_t);
+            g_hud_dual_swap = !g_hud_dual_swap;
+            Msg("portal-mod E27: shot [%s] -> %s hand, t %.3f", anm_name_b.c_str(), g_hud_dual_swap ? "left" : "right", Device.fTimeGlobal);
+        }
+        if (e27_shot)
+        {
+            m_dual_last_motion = M2;
+            m_dual_last_t = Device.fTimeGlobal;
+            m_dual_last_speed = speed;
+        }
 
         if (m_has_separated_hands)
         {

@@ -178,6 +178,9 @@ class_<CScriptGameObject> script_register_game_object1(class_<CScriptGameObject>
         // bloodsucker
         .def("set_invisible", &CScriptGameObject::set_invisible)
         .def("set_manual_invisibility", &CScriptGameObject::set_manual_invisibility)
+        .def("puppet_cycle", &CScriptGameObject::puppet_cycle) // portal-mod E33
+        .def("puppet_pose", &CScriptGameObject::puppet_pose)
+        .def("puppet_off", &CScriptGameObject::puppet_off)
         .def("set_alien_control", &CScriptGameObject::set_alien_control)
 
         // zombie

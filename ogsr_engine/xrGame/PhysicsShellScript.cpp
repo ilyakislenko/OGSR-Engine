@@ -82,6 +82,8 @@ void CPhysicsElement::script_register(lua_State* L)
                   .def("global_transform", &global_transform)];
 }
 
+static bool is_joint_active(CPhysicsJoint* j) { return j->bActive; } // portal-mod E25
+
 void CPhysicsJoint::script_register(lua_State* L)
 {
     module(L)[class_<CPhysicsJoint>("physics_joint")
@@ -104,5 +106,7 @@ void CPhysicsJoint::script_register(lua_State* L)
                   .def("get_limits", &CPhysicsJoint::GetLimits, pure_out_value<2>() + pure_out_value<3>())
                   .def("get_axis_dir", &CPhysicsJoint::GetAxisDirDynamic)
                   .def("get_anchor", &CPhysicsJoint::GetAnchorDynamic)
-                  .def("is_breakable", &CPhysicsJoint::isBreakable)];
+                  .def("is_breakable", &CPhysicsJoint::isBreakable)
+                  .def("deactivate", &CPhysicsJoint::Deactivate) // portal-mod E25: a door off its hinges
+                  .def("is_active", &is_joint_active)];
 }

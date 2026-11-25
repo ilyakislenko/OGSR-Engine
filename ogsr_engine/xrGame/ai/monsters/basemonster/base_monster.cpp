@@ -314,6 +314,9 @@ void CBaseMonster::UpdateCL()
 
     control().update_frame();
 
+    if (m_puppet && g_Alive()) // portal-mod E33: the script's transform over the direction controller's
+        XFORM().set(m_puppet_xform);
+
     m_pPhysics_support->in_UpdateCL();
 }
 

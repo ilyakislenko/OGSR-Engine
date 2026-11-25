@@ -81,7 +81,12 @@ void CPhysicObject::RunStartupAnim(CSE_Abstract* D)
             CSE_Visual* visual = smart_cast<CSE_Visual*>(D);
             R_ASSERT(visual);
             R_ASSERT2(*visual->startup_animation, "no startup animation");
-            PKinematicsAnimated->PlayCycle(*visual->startup_animation);
+            // portal-mod E32: a model without that cycle stands in its bind pose (a script-spawned wreck: "$editor")
+            const MotionID m = PKinematicsAnimated->ID_Cycle_Safe(visual->startup_animation);
+            if (m.valid())
+                PKinematicsAnimated->PlayCycle(m);
+            else
+                Msg("~ portal-mod E32: [%s] has no cycle [%s] - bind pose", cName().c_str(), visual->startup_animation.c_str());
         }
         smart_cast<IKinematics*>(Visual())->CalculateBones_Invalidate();
         smart_cast<IKinematics*>(Visual())->CalculateBones();
