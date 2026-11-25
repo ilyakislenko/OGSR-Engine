@@ -7,6 +7,7 @@
 #include <chrono>
 #include <algorithm>
 #include <random>
+#include <array>
 #include "portal_mod_vision.h"
 #include "../xr_3da/portal_mod_vision_shared.h"
 #include "portal_mod_replay.h"
@@ -800,6 +801,55 @@ void update_lock()
 LPCSTR threat_word(float th) { return th >= 0.72f ? T("threat_high", "HIGH") : th >= 0.45f ? T("threat_mid", "MEDIUM") : th > 0.15f ? T("threat_low", "LOW") : T("threat_none", "NONE"); }
 u32 threat_col(float th) { return th >= 0.72f ? C.col_hot : th >= 0.45f ? C.col_warm : C.col; }
 
+// where the priority target's card goes: right of its brackets, left, above or below them - the place that covers the
+// fewest other targets' brackets and tags and stays on the screen; it keeps its place until another is clearly better
+// (no hopping from frame to frame as men move)
+int g_card_pick{-1};
+float g_card_for{-1.f};
+
+float rect_overlap(const float* a, const float* b)
+{
+    const float w = std::min(a[2], b[2]) - std::max(a[0], b[0]), h = std::min(a[3], b[3]) - std::max(a[1], b[1]);
+    return w > 0.f && h > 0.f ? w * h : 0.f;
+}
+
+void card_place(u16 self, float x0, float y0, float x1, float y1, float cw, float ch, float& tx, float& ty)
+{
+    xr_vector<std::array<float, 4>> others;
+    for (const auto& [id, o] : g_targets)
+        if (id != self && o.on_screen && (o.t_dead < 0.f || g_now - o.t_dead < 0.9f))
+        {
+            const float ox0 = o.box[0] + o.off[0], oy0 = o.box[1] + o.off[1], ox1 = o.box[2] + o.off[2], oy1 = o.box[3] + o.off[3];
+            const float tag = (o.ghost ? 210.f : (o.t_dead >= 0.f ? 150.f : 70.f)) * S; // its number and distance, or the stamp
+            others.push_back({ox0 - 6.f * S, oy0 - 8.f * S, ox1 + 8.f * S + tag, oy1 + 14.f * S});
+        }
+    const float yt = y0 - 4.f * S, lo = 120.f * S, hi = SH - 160.f * S - ch;
+    const float cand[6][2] = {
+        {x1 + 26.f * S, yt}, {x0 - 26.f * S - cw, yt}, {x1 + 26.f * S, yt - ch - 10.f * S},
+        {x0 - 26.f * S - cw, yt - ch - 10.f * S}, {x1 + 26.f * S, y1 + 24.f * S}, {x0 - 26.f * S - cw, y1 + 24.f * S}};
+    float score[6], best = flt_max;
+    int bi = 0;
+    for (int i = 0; i < 6; ++i)
+    {
+        const float cx = cand[i][0], cy = clampr(cand[i][1], lo, std::max(lo, hi));
+        const float r[4] = {cx - 4.f * S, cy - 4.f * S, cx + cw + 4.f * S, cy + ch + 4.f * S};
+        float s = float(i) * 40.f * S * S; // the order above wins a tie
+        for (const auto& o : others)
+            s += rect_overlap(r, o.data());
+        const float off = std::max(0.f, 70.f * S - cx) + std::max(0.f, cx + cw - (SW - 60.f * S)) + std::fabs(cy - cand[i][1]) * 0.5f;
+        s += off * ch * 3.f; // off the screen (or pushed off its place) costs more than covering a tag
+        score[i] = s;
+        if (s < best)
+            best = s, bi = i;
+    }
+    if (g_card_for != g_primary_t || g_card_pick < 0)
+        g_card_pick = bi, g_card_for = g_primary_t;
+    else if (best + 600.f * S * S < score[g_card_pick])
+        g_card_pick = bi;
+    tx = clampr(cand[g_card_pick][0], 70.f * S, std::max(70.f * S, SW - 60.f * S - cw));
+    ty = clampr(cand[g_card_pick][1], lo, std::max(lo, hi));
+}
+
 void draw_target(const Target& g, float a)
 {
     const float x0 = g.box[0] + g.off[0], y0 = g.box[1] + g.off[1], x1 = g.box[2] + g.off[2], y1 = g.box[3] + g.off[3];
@@ -886,10 +936,8 @@ void draw_target(const Target& g, float a)
     for (const auto& s : lines)
         cw = std::max(cw, text_w(s.c_str(), F_SM));
     cw = std::max(cw, text_w(lines[0].c_str(), F_TAG));
-    float tx = x1 + 26.f * S;
-    if (tx + cw > SW - 60.f * S)
-        tx = x0 - 26.f * S - cw;
-    float ty = clampr(y0 - 4.f * S, 120.f * S, SH - 160.f * S - lh * float(lines.size()));
+    float tx, ty;
+    card_place(g.id, x0, y0, x1, y1, cw, 6.f * S + lh * float(lines.size()), tx, ty);
     // the leader from the brackets' corner to the card
     const bool right = tx > x1;
     const float lx = right ? x1 : x0, ly = y0;
