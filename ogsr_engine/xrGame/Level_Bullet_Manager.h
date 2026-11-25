@@ -64,6 +64,11 @@ struct SBullet
 
     bool m_on_bullet_hit;
 
+    // portal-mod E53b: the replay's recorder - the bullet's track (0: not recorded), its own flight time in ms (whole
+    // steps) and the part of the last step it flew
+    u32 pm_id{};
+    u32 pm_tau{};
+    float pm_frac{};
 public:
     SBullet();
     ~SBullet();
@@ -185,6 +190,7 @@ public:
     void CommitEvents(); // @ the start of frame
     void CommitRenderSet(); // @ the end of frame
     void Render();
+    const BulletVec& pm_rendered() const { return m_BulletsRendered; } // portal-mod E53: the bullets drawn this frame (the replay records them)
 };
 
 struct bullet_test_callback_data

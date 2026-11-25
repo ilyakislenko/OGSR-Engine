@@ -114,3 +114,15 @@ void CTracer::Render(const Fvector& pos, const Fvector& center, const Fvector& d
         FillSprite_Line(center, dir, width * .5f, length * .5f, m_aColors[colorID]);
     }
 }
+
+// portal-mod E53b: the replay's slow-motion bullet: a colour of its own (0: the tracer's), the round head optional
+void CTracer::PmRender(const Fvector& pos, const Fvector& center, const Fvector& dir, float length, float width, u32 argb, u8 colorID, bool head)
+{
+    if (!::Render->ViewBase.testSphere_dirty((Fvector&)center, length * .5f + width))
+        return;
+    if (!argb)
+        argb = m_aColors.empty() ? 0xffffffff : m_aColors[colorID < m_aColors.size() ? colorID : 0];
+    if (head)
+        FillSprite_Circle(pos, width * .5f, width * .5f, argb);
+    FillSprite_Line(center, dir, width * .5f, length * .5f, argb);
+}

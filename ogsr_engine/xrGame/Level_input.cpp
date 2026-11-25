@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include <dinput.h>
 #include "HUDmanager.h"
+#include "portal_mod_replay.h" // portal-mod E53
 #include "..\xr_3da\XR_IOConsole.h"
 #include "entity_alive.h"
 #include "game_sv_single.h"
@@ -49,6 +50,9 @@ void CLevel::IR_OnMouseWheel(int direction)
     if (Editor_MouseWheel(direction))
         return;
 
+    if (pm_replay::mouse_wheel(direction)) // portal-mod E53: FOV / the flight's speed in a replay
+        return;
+
     if (g_bDisableAllInput)
         return;
 
@@ -86,6 +90,9 @@ void CLevel::IR_OnMouseMove(int dx, int dy)
     if (Editor_MouseMove(dx, dy))
         return;
 
+    if (pm_replay::mouse_move(dx, dy)) // portal-mod E53: the replay's camera
+        return;
+
     if (g_bDisableAllInput)
         return;
     if (HUD().GetUI()->IR_OnMouseMove(dx, dy))
@@ -111,6 +118,9 @@ extern bool g_block_all_except_movement;
 void CLevel::IR_OnKeyboardPress(int key)
 {
     if (Editor_KeyPress(key))
+        return;
+
+    if (pm_replay::key_press(key)) // portal-mod E53: Insert / Home / End in the game, every key but the console's in a replay
         return;
 
     if (GamePersistent().OnKeyboardPress(key))
@@ -342,6 +352,9 @@ void CLevel::IR_OnKeyboardRelease(int key)
     if (Editor_KeyRelease(key))
         return;
 
+    if (pm_replay::key_release(key)) // portal-mod E53: a key let go that the replay took
+        return;
+
     if (g_bDisableAllInput)
         return;
 
@@ -384,6 +397,9 @@ void CLevel::IR_OnKeyboardRelease(int key)
 void CLevel::IR_OnKeyboardHold(int key)
 {
     if (Editor_KeyHold(key))
+        return;
+
+    if (pm_replay::key_hold(key)) // portal-mod E53: nothing held reaches the game in a replay
         return;
 
     if (g_bDisableAllInput)

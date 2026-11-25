@@ -621,6 +621,19 @@ void CParticleGroup::SetHudMode(BOOL b)
     }
 }
 
+void CParticleGroup::PmSetAhead(float ms) // portal-mod E53b: every effect, the particles' children too
+{
+    static thread_local xr_vector<dxRender_Visual*> vis;
+    for (auto& item : items)
+    {
+        vis.clear();
+        item.GetVisuals(vis);
+        for (dxRender_Visual* v : vis)
+            if (CParticleEffect* E = smart_cast<CParticleEffect*>(v))
+                E->PmSetAhead(ms);
+    }
+}
+
 BOOL CParticleGroup::GetHudMode()
 {
     if (items.size())

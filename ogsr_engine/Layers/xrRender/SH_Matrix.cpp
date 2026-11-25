@@ -14,7 +14,7 @@ void CMatrix::Calculate()
     case modeDetail: return;
     case modeTCM: {
         Fmatrix T;
-        float sU = 1, sV = 1, t = Device.fTimeGlobal;
+        float sU = 1, sV = 1, t = portal_mod_replay ? portal_mod_replay_shader_time : Device.fTimeGlobal; // portal-mod E53
         tc_trans(xform, .5f, .5f);
         if (tcm & tcmRotate)
         {

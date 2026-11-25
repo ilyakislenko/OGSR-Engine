@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "HUDManager.h"
 #include "portal_mod.h" // portal-mod E21
+#include "portal_mod_replay.h" // portal-mod E53
 #include "hudtarget.h"
 
 #include "actor.h"
@@ -327,7 +328,8 @@ void CHUDManager::RenderUI()
     if (!b_online)
         return;
 
-    if (HUD().GetUI()->GameIndicatorsShown() /*&& psHUD_Flags.is(HUD_DRAW | HUD_DRAW_RT)*/)
+    const bool pm_clean = pm_replay::clean_frame(); // portal-mod E53: a replay's frame is clean - no HUD, crosshair, hit marks
+    if (!pm_clean && HUD().GetUI()->GameIndicatorsShown() /*&& psHUD_Flags.is(HUD_DRAW | HUD_DRAW_RT)*/)
     {
         HitMarker.Render();
 
@@ -335,9 +337,10 @@ void CHUDManager::RenderUI()
             m_pHUDTarget->Render();
     }
 
-    if (pUI)
+    if (pUI && !pm_clean)
         pUI->Render();
 
+    pm_replay::render_ui(); // portal-mod E53: the replay's hint, the REC mark
     Font().Render();
 
 

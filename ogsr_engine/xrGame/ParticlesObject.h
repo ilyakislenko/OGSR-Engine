@@ -41,6 +41,23 @@ public:
 
     const shared_str Name();
 
+    // portal-mod E53: for the replay's recorder - the last parent given (UpdateParent / SetXFORM / play_at_pos) and how,
+    // the system's serial number, when it was played (Device.dwTimeGlobal), whether on the HUD
+    Fmatrix pm_parent = Fidentity;
+    Fvector pm_vel{};
+    BOOL pm_xform{};
+    u32 pm_serial{};
+    u32 pm_born{};
+    bool pm_hud{};
+    // portal-mod E53b: the system steps in whole quanta of PM_PS_QUANTUM ms with a random sequence of its own, seeded
+    // at every Play: the same history whatever the frame rate or the thread - the replay re-simulates it exactly
+    static constexpr u32 PM_PS_QUANTUM = 9;
+    CRandom pm_rng;
+    u32 pm_acc{};
+    u32 pm_seed{};
+    u32 pm_plays{};
+    void pm_reseed();
+
 public:
     static CParticlesObject* Create(LPCSTR p_name, BOOL bAutoRemove = TRUE, bool remove_on_game_load = true)
     {

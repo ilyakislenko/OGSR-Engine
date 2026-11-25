@@ -19,10 +19,20 @@ typedef struct _PROCESSOR_POWER_INFORMATION
 // Initialized on startup
 XRCORE_API Fmatrix Fidentity;
 
+// portal-mod E53b: a sequence of one's own in place of the thread's for a while (a particle system steps with its
+// own, so the replay repeats its history); returns the one it replaces
+static thread_local CRandom* pm_random_cur{};
+CRandom* pm_random_use(CRandom* r)
+{
+    CRandom* const was = pm_random_cur;
+    pm_random_cur = r;
+    return was;
+}
+
 CRandom& _GetRandom()
 {
     thread_local static CRandom _Random{};
-    return _Random;
+    return pm_random_cur ? *pm_random_cur : _Random;
 }
 
 namespace CPU

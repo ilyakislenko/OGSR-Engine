@@ -124,9 +124,8 @@ void CROS_impl::update(IRenderable* O)
         return;
     }
 
-    if (isnan(_object->renderable.xform._41) || 
-        isnan(_object->renderable.xform._42) ||
-        isnan(_object->renderable.xform._43))
+    if (_object && // portal-mod E53: a replay's puppet is an IRenderable, not a CObject
+        (isnan(_object->renderable.xform._41) || isnan(_object->renderable.xform._42) || isnan(_object->renderable.xform._43)))
     {
         if (!skip)
         {

@@ -1005,14 +1005,17 @@ void CActor::shedule_Update(u32 DT)
         return;
     }
 
-    if (m_holder)
-        m_holder->UpdateEx(currentFOV());
+    if (!portal_mod_replay) // portal-mod E53: a replay sets the camera itself (pm_replay::on_frame), the device's own
+    {                       // OnCameraUpdated after the frame builds the matrices from it
+        if (m_holder)
+            m_holder->UpdateEx(currentFOV());
 
-    Device.Statistic->cam_Update.Begin();
-    cam_Update(float(Device.dwTimeDelta) / 1000.0f, currentFOV());
-    Device.Statistic->cam_Update.End();
+        Device.Statistic->cam_Update.Begin();
+        cam_Update(float(Device.dwTimeDelta) / 1000.0f, currentFOV());
+        Device.Statistic->cam_Update.End();
 
-    Device.OnCameraUpdated(true);
+        Device.OnCameraUpdated(true);
+    }
 
     //
     clamp(DT, 0u, 100u);

@@ -24,4 +24,5 @@ public:
     virtual const shared_str Name() = 0;
     virtual void SetHudMode(BOOL b) = 0;
     virtual BOOL GetHudMode() = 0;
+    virtual void PmSetAhead(float ms) {} // portal-mod E53b: draw the particles moved on by ms since the last step (the replay's slow motion)
 };

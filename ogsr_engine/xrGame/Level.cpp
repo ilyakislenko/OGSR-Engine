@@ -33,6 +33,7 @@
 #include "level_sounds.h"
 #include "car.h"
 #include "portal_mod.h" // portal-mod E4
+#include "portal_mod_replay.h" // portal-mod E53
 #include "PHShell.h"
 #include "PHObject.h"
 #include "Geometry.h"
@@ -142,6 +143,7 @@ CLevel::CLevel()
 
 CLevel::~CLevel()
 {
+    pm_replay::shutdown(); // portal-mod E53: the replay closes, the recorder lets its buffer go
     xr_delete(g_player_hud);
     //	g_pGameLevel		= NULL;
     Msg("- Destroying level");
@@ -415,7 +417,11 @@ void CLevel::OnFrame()
 
     if (!s_ScriptTime)
     {
-        g_pGamePersistent->Environment().SetGameTime(GetEnvironmentGameDayTimeSec(), game->GetEnvironmentGameTimeFactor());
+        float pm_replay_sec; // portal-mod E53: a replay's time of day
+        if (pm_replay::env_time(pm_replay_sec))
+            g_pGamePersistent->Environment().SetGameTime(pm_replay_sec, game->GetEnvironmentGameTimeFactor());
+        else
+            g_pGamePersistent->Environment().SetGameTime(GetEnvironmentGameDayTimeSec(), game->GetEnvironmentGameTimeFactor());
     }
 
     m_ph_commander->update();
@@ -437,6 +443,8 @@ void CLevel::OnFrame()
 
     if (ps_lua_gc_method != gc_timeout)
         Device.add_to_seq_parallel(fastdelegate::MakeDelegate(this, &CLevel::script_gc));
+
+    pm_replay::on_frame(); // portal-mod E53: records the frame, or plays the open replay (its camera last)
 
     ShowEditor();
 }

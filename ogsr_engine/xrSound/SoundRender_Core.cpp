@@ -138,6 +138,37 @@ int CSoundRender_Core::pause_emitters(bool val)
     return m_iPauseCounter;
 }
 
+// portal-mod E53: the sounds playing now, for the replay's recorder (the game's thread; the sound thread holds the lock
+// while it updates the emitters)
+void CSoundRender_Core::portal_mod_snapshot(xr_vector<PORTAL_MOD_SOUND_SNAP>& out)
+{
+    std::scoped_lock<std::mutex> lock(m_bLocked);
+    for (CSoundRender_Emitter* E : s_emitters)
+    {
+        if (!E || !E->isPlaying() || E->iPaused != 0 || !E->owner_data)
+            continue;
+        CSoundRender_Source* src = E->source();
+        if (!src || !src->file_name())
+            continue;
+        PORTAL_MOD_SOUND_SNAP s;
+        s.id = E;
+        s.name = src->file_name();
+        s.pos = E->p_source.position;
+        s.volume = E->p_source.volume;
+        s.freq = E->p_source.freq;
+        s.min_dist = E->p_source.min_distance;
+        s.max_dist = E->p_source.max_distance;
+        s.b2D = !!E->b2D;
+        const auto st = E->m_current_state;
+        s.looped = st == CSoundRender_Emitter::stStartingLooped || st == CSoundRender_Emitter::stPlayingLooped || st == CSoundRender_Emitter::stSimulatingLooped ||
+            st == CSoundRender_Emitter::stStartingLoopedDelayed;
+        s.time = fTimer_Value - E->fTimeStarted;
+        if (s.time < 0.f)
+            s.time = 0.f;
+        out.push_back(s);
+    }
+}
+
 #define SNDENV_FILENAME_XR "senvironment.xr"
 #define SNDENV_FILENAME_LTX "senvironment.ltx"
 

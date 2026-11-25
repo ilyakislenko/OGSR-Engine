@@ -215,6 +215,9 @@ public:
 
     virtual bool StopSprintOnFire() { return true; }
 
+public:
+    void PmUpdateXForm() { UpdateXForm(); } // portal-mod E53: the replay's recorder: the item in the hand as of this frame
+
 protected:
     virtual void UpdateXForm();
 

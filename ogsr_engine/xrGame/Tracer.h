@@ -21,4 +21,5 @@ public:
     ~CTracer();
 
     void Render(const Fvector& pos, const Fvector& center, const Fvector& dir, float length, float width, u8 colorID);
+    void PmRender(const Fvector& pos, const Fvector& center, const Fvector& dir, float length, float width, u32 argb, u8 colorID, bool head); // portal-mod E53b
 };

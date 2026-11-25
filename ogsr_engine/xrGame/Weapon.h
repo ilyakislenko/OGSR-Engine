@@ -362,6 +362,9 @@ public:
 
     virtual const Fvector& get_CurrentFirePoint() { return get_LastFP(); }
     virtual const Fvector& get_CurrentFirePoint2() { return get_LastFP2(); }
+    // portal-mod E53b: the replay's recorder - the muzzle's frame on the HUD and on the world model (a first-person
+    // shot's flame and smoke go where the world model's muzzle is); false when not on the HUD (portal_mod_replay.cpp)
+    bool PmFireFrames(Fmatrix& hud, Fmatrix& world);
     virtual const Fmatrix& get_ParticlesXFORM()
     {
         UpdateFireDependencies_internal();

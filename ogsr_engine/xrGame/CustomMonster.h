@@ -65,6 +65,7 @@ public:
     int eye_bone;
     float eye_fov;
     float eye_range;
+    void PmEye(Fvector& pos, Fvector& dir); // portal-mod E53: the eye as eye_pp_s0 has it (portal_mod_replay.cpp)
 
     float m_fCurSpeed;
 

@@ -113,7 +113,8 @@ void IGame_Level::OnFrame()
 
     // Update all objects
     VERIFY(bReady);
-    Objects.Update(false);
+    if (!portal_mod_replay) // portal-mod E53: a replay plays - the objects stand
+        Objects.Update(false);
     g_hud->OnFrame();
 
     // Ambience

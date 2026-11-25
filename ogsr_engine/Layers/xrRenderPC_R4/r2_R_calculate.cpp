@@ -296,6 +296,9 @@ void CRender::ExportLights()
         light* L = smart_cast<light*>(spatial->dcast_Light());
         R_ASSERT(L);
 
+        if (portal_mod_replay && !L->flags.bStatic && !L->portal_mod_replay_light)
+            continue; // portal-mod E53: over a replay only the level's lights and the replay's own
+
         //const float lod = L->get_LOD();
         //if (lod > EPS_L)
         {
@@ -311,6 +314,9 @@ void CRender::ExportLights()
         // lightsource
         light* L = smart_cast<light*>(spatial->dcast_Light());
         R_ASSERT(L);
+
+        if (portal_mod_replay && !L->flags.bStatic && !L->portal_mod_replay_light)
+            continue; // portal-mod E53
 
         if (Device.dwFrame == L->frame_render)
             continue;

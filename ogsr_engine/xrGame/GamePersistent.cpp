@@ -607,7 +607,7 @@ void CGamePersistent::OnFrame()
         Engine.Sheduler.Update();
 
     // update weathers ambient
-    if (!Device.Paused())
+    if (!Device.Paused() && !portal_mod_replay) // portal-mod E53: no live ambient over a replay
         WeathersUpdate();
 
     if (0 != pDemoFile)

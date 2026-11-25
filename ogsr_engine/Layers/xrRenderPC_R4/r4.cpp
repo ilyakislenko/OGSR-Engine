@@ -1004,3 +1004,30 @@ void CRender::End()
 
     Target->reset_target_dimensions();
 }
+
+// portal-mod E53: the dynamic lights around a point, for the replay's recorder (not the static ones: they are in the
+// level; not the HUD's, not the parts of a shadowed omni light: the light they belong to is recorded)
+void CRender::portal_mod_lights(xr_vector<PORTAL_MOD_LIGHT_SNAP>& out, const Fvector& center, float radius)
+{
+    xr_vector<ISpatial*> lst;
+    g_SpatialSpace->q_sphere(lst, 0, STYPE_LIGHTSOURCE, center, radius);
+    for (ISpatial* spatial : lst)
+    {
+        light* L = smart_cast<light*>(spatial->dcast_Light());
+        if (!L || L->flags.bStatic || !L->flags.bActive || L->flags.bHudMode || L->flags.type == IRender_Light::OMNIPART || L->portal_mod_replay_light)
+            continue;
+        PORTAL_MOD_LIGHT_SNAP s;
+        s.id = L;
+        s.type = int(L->flags.type);
+        s.position = L->position;
+        s.direction = L->direction;
+        s.right = L->right;
+        s.range = L->range;
+        s.cone = L->cone;
+        s.virtual_size = L->virtual_size;
+        s.color = L->color;
+        s.shadow = !!L->flags.bShadow;
+        s.volumetric = !!L->flags.bVolumetric;
+        out.push_back(s);
+    }
+}

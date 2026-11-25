@@ -160,6 +160,8 @@ void CPHWorld::SetGravity(float g)
 
 void CPHWorld::OnFrame()
 {
+    if (portal_mod_replay)
+        return; // portal-mod E53: the physics world stands while a replay plays
     // Msg									("------------- physics: %d / %d",u32(Device.dwFrame),u32(m_steps_num));
     //просчитать полет пуль
     /*

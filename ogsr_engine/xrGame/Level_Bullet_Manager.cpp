@@ -5,6 +5,7 @@
 #include "stdafx.h"
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
+#include "portal_mod_replay.h" // portal-mod E53
 #include "game_cl_base.h"
 #include "Actor.h"
 #include "gamepersistent.h"
@@ -154,6 +155,7 @@ SBullet& CBulletManager::AddBullet(const Fvector& position, const Fvector& direc
     bullet.Init(position, direction, starting_speed, power, impulse, sender_id, sendersweapon_id, e_hit_type, maximum_distance, cartridge, SendHit);
     bullet.frame_num = Device.dwFrame;
     bullet.flags.aim_bullet = AimBullet;
+    bullet.pm_id = pm_replay::bullet_born(bullet, sender_id, sendersweapon_id, cartridge.m_ammoSect.c_str()); // portal-mod E53b, portal-mod E53c: its ammo
     return bullet;
 }
 
@@ -190,7 +192,15 @@ void CBulletManager::UpdateWorkload()
         // calculate bullet
         for (u32 i = 0; i < cur_step_num; i++)
         {
-            if (!CalcBullet(rq_storage, rq_spatial, &bullet, m_dwStepTime))
+            const float pm_v = bullet.speed; // portal-mod E53b
+            const bool pm_alive = CalcBullet(rq_storage, rq_spatial, &bullet, m_dwStepTime);
+            if (bullet.pm_id) // portal-mod E53b: the replay's recorder - the bullet's own time, where it ended
+            {
+                if (!pm_alive)
+                    pm_replay::bullet_point(bullet.pm_id, float(bullet.pm_tau) + bullet.pm_frac * float(m_dwStepTime), bullet.pos, pm_v, pm_replay::BP_END);
+                bullet.pm_tau += m_dwStepTime;
+            }
+            if (!pm_alive)
             {
                 collide::rq_result res;
                 RegisterEvent(EVENT_REMOVE, FALSE, &bullet, Fvector().set(0, 0, 0), res, (u16)k);
@@ -206,6 +216,8 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
 
     float delta_time_sec = float(delta_time) / 1000.f;
     float range = bullet->speed * delta_time_sec;
+    const float pm_full = range; // portal-mod E53b: the step's whole flight (the part flown: pm_frac)
+    const float pm_v = bullet->speed;
 
     float max_range = bullet->max_dist - bullet->fly_dist;
     if (range > max_range)
@@ -260,10 +272,19 @@ bool CBulletManager::CalcBullet(collide::rq_results& rq_storage, xr_vector<ISpat
         bullet->pos.mad(bullet->dir, 0.02f);
         cur_dir = bullet->dir;
         bullet->portal_dist = 0.f;
+        if (bullet->pm_id) // portal-mod E53b: into one portal and out of the other at the same moment
+        {
+            const float pm_t = float(bullet->pm_tau) + (pm_full > EPS_L ? std::min(1.f, range / pm_full) : 1.f) * float(delta_time);
+            pm_replay::bullet_point(bullet->pm_id, pm_t, at, pm_v, pm_replay::BP_JUMP_FROM);
+            pm_replay::bullet_point(bullet->pm_id, pm_t, bullet->pos, pm_v, pm_replay::BP_JUMP_TO);
+        }
         portal_mod_bullets.fetch_add(1, std::memory_order_relaxed); // portal-mod E5
         range = 0.f;
     }
     range = std::max(EPS_L, range);
+    bullet->pm_frac = pm_full > EPS_L ? std::min(1.f, range / pm_full) : 1.f; // portal-mod E53b: the part of the step flown
+    if (bullet->pm_id && bullet->flags.ricochet_was) // portal-mod E53b: a ricochet's corner (the bullet is there now)
+        pm_replay::bullet_point(bullet->pm_id, float(bullet->pm_tau) + bullet->pm_frac * float(delta_time), bullet->pos, pm_v, 0);
 
     bullet->flags.skipped_frame = (Device.dwFrame >= bullet->frame_num);
 
@@ -365,6 +386,53 @@ void CBulletManager::Render()
             }
     }
 #endif
+
+    if (const auto* pm_set = pm_replay::tracers()) // portal-mod E53: a replay draws its recorded tracers, not the live bullets
+    {
+        if (pm_set->empty())
+            return;
+        UIRender->StartPrimitive((u32)pm_set->size() * 12, IUIRender::ptTriList, IUIRender::pttLIT);
+        for (const auto& b : *pm_set)
+        {
+            if (b.slug) // portal-mod E53b: a bullet in slow motion - drawn as the replay gives it
+            {
+                Fvector center;
+                center.mad(b.pos, b.dir, -b.length * .5f);
+                tracers.PmRender(b.pos, center, b.dir, b.length, b.width, b.argb, b.color, !!b.head);
+                continue;
+            }
+            float length = b.speed * float(m_dwStepTime) / 1000.f;
+            if (length < m_fTracerLengthMin)
+                continue;
+            if (length > m_fTracerLengthMax)
+                length = m_fTracerLengthMax;
+            if (length > b.portal_dist)
+                length = b.portal_dist;
+            if (length < m_fTracerLengthMin)
+                continue;
+            float width = m_fTracerWidth;
+            float dist2segSqr = SqrDistancePointToSegment(Device.vCameraPosition, b.pos, Fvector().mul(b.dir, length));
+            if (dist2segSqr < 1.f)
+            {
+                if (dist2segSqr < 0.09f)
+                    dist2segSqr = 0.09f;
+                width *= _sqrt(dist2segSqr);
+            }
+            if (Device.vCameraPosition.distance_to_sqr(b.pos) < (length * length))
+                length = Device.vCameraPosition.distance_to(b.pos) - 0.3f;
+            if (length <= 0.f)
+                continue;
+            Fvector center;
+            center.mad(b.pos, b.dir, -length * .5f);
+            tracers.Render(b.pos, center, b.dir, length, width, b.color);
+        }
+        UIRender->CacheSetCullMode(IUIRender::cmNONE);
+        UIRender->CacheSetXformWorld(Fidentity);
+        UIRender->SetShader(*tracers.sh_Tracer);
+        UIRender->FlushPrimitive();
+        UIRender->CacheSetCullMode(IUIRender::cmCCW);
+        return;
+    }
 
     if (m_BulletsRendered.empty())
         return;

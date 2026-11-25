@@ -89,6 +89,7 @@ public:
     virtual void destroy(ref_sound& S);
     virtual void stop_emitters();
     virtual int pause_emitters(bool val);
+    void portal_mod_snapshot(xr_vector<PORTAL_MOD_SOUND_SNAP>& out) override; // portal-mod E53
 
     virtual void play(ref_sound& S, CObject* O, u32 flags = 0, float delay = 0.f);
     virtual void play_at_pos(ref_sound& S, CObject* O, const Fvector& pos, u32 flags = 0, float delay = 0.f);

@@ -191,6 +191,18 @@ void CParticleEffect::OnFrame(u32 frame_dt)
     }
 }
 
+// portal-mod E53b: the replay's slow motion - the particles drawn moved on by the time since the effect's last step
+void CParticleEffect::PmSetAhead(float ms)
+{
+    m_pm_ahead = 0.f;
+    if (ms > 0.f && m_Def)
+    {
+        const u32 u = m_Def->GetUStep();
+        if (u)
+            m_pm_ahead = (float(m_MemDT) + ms) * m_Def->GetFStep() / float(u);
+    }
+}
+
 BOOL CParticleEffect::Compile(CPEDef* def)
 {
     m_Def = def;
@@ -403,7 +415,16 @@ void ParticleRenderStream(CParticleEffect& pPE, PAPI::Particle* particles, FVF::
 
     for (u32 i = p_from; i < p_to; i++)
     {
-        Particle& m = particles[i];
+        // portal-mod E53b: moved on along its velocity by the replay's time since the last step - a copy, the state stays
+        Particle pm_moved;
+        Particle* pm_src = &particles[i];
+        if (pPE.m_pm_ahead > 0.f)
+        {
+            pm_moved = particles[i];
+            pm_moved.pos.mad(pm_moved.vel, pPE.m_pm_ahead);
+            pm_src = &pm_moved;
+        }
+        Particle& m = *pm_src;
 
         Fvector2 lt, rb;
         lt.set(0.f, 0.f);

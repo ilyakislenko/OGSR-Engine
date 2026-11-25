@@ -123,7 +123,7 @@ void dxRainRender::Render(CBackend& cmd_list, CEffect_Rain & owner)
         return;
 
     {
-        float dt = Device.fTimeDelta;
+        float dt = PM_RAIN_DT; // portal-mod E53b: the replay's clock over a replay
         _IndexStream& _IS = RImplementation.Index;
         cmd_list.set_Shader(_splash_SH);
         cmd_list.set_c("ssfx_rain_setup", ps_ssfx_rain_3); // Alpha, Refraction
@@ -230,12 +230,12 @@ void dxRainRender::Calculate(CEffect_Rain& owner)
     for (auto& one : owner.items)
     {
         // physics and time control
-        if (one.dwTime_Hit < Device.dwTimeGlobal)
+        if (one.dwTime_Hit < PM_RAIN_MS) // portal-mod E53b
         {
             owner.Hit(one.Phit);
         }
 
-        if (one.dwTime_Life < Device.dwTimeGlobal)
+        if (one.dwTime_Life < PM_RAIN_MS)
         {
             if (total_cnt <= desired_items)
                 owner.Born(one, source_radius, _drop_speed);
@@ -243,7 +243,7 @@ void dxRainRender::Calculate(CEffect_Rain& owner)
                 total_cnt--;
         }
 
-        const float dt = Device.fTimeDelta;
+        const float dt = PM_RAIN_DT;
         one.P.mad(one.D, one.fSpeed * dt);
 
         Device.Statistic->dxRainRender.Begin();

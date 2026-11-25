@@ -71,6 +71,11 @@ public:
     virtual void SetHudMode(BOOL b) { m_RT_Flags.set(flRT_HUDmode, b); }
     virtual BOOL GetHudMode() { return m_RT_Flags.is(flRT_HUDmode); }
 
+    // portal-mod E53b: the replay's slow motion - the particles drawn moved on along their velocity (seconds of
+    // the simulation since its last step; 0: as they are)
+    float m_pm_ahead{};
+    void PmSetAhead(float ms) override;
+
     virtual float GetTimeLimit()
     {
         VERIFY(m_Def);

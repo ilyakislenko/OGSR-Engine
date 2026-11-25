@@ -277,6 +277,17 @@ public:
 typedef void __stdcall sound_event(ref_sound_data_ptr S, float range);
 
 /// definition (Sound Manager Interface)
+// portal-mod E53: a sound playing now, as the replay records it (CSound_manager_interface::portal_mod_snapshot)
+struct PORTAL_MOD_SOUND_SNAP
+{
+    const void* id; // the emitter
+    shared_str name; // the source, as ref_sound::create takes it
+    Fvector pos;
+    float volume, freq, min_dist, max_dist;
+    float time; // seconds since it started
+    bool b2D, looped;
+};
+
 class XRSOUND_API CSound_manager_interface
 {
     virtual void _initialize(int stage) = 0;
@@ -301,6 +312,7 @@ public:
     virtual void destroy(ref_sound& S) = 0;
     virtual void stop_emitters() = 0;
     virtual int pause_emitters(bool val) = 0;
+    virtual void portal_mod_snapshot(xr_vector<PORTAL_MOD_SOUND_SNAP>& out) {} // portal-mod E53: the sounds playing now
 
     virtual void play(ref_sound& S, CObject* O, u32 flags = 0, float delay = 0.f) = 0;
     virtual void play_at_pos(ref_sound& S, CObject* O, const Fvector& pos, u32 flags = 0, float delay = 0.f) = 0;

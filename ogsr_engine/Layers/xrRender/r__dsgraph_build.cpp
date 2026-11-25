@@ -715,6 +715,9 @@ void R_dsgraph_structure::build_subspace(const IRender_Sector::sector_id_t& star
         // Determine visibility for dynamic part of scene
         for (const auto spatial : lstRenderables)
         {
+            if (portal_mod_replay && !(spatial->spatial.type & PORTAL_MOD_STYPE_REPLAY))
+                continue; // portal-mod E53: a replay's subspaces and shadows - its puppets only
+
             /*if (o.is_main_pass)
             {
                 const auto& entity_pos = spatial->spatial_sector_point();

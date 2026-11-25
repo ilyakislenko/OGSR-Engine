@@ -29,6 +29,7 @@
 #include "map_manager.h"
 #include "map_location.h"
 #include "portal_mod.h" // portal-mod E10
+#include "portal_mod_replay.h" // portal-mod E53
 #include "phworld.h"
 #include "../xrcdb/xr_collide_defs.h"
 #include "script_rq_result.h"
@@ -1758,6 +1759,20 @@ void CLevel::script_register(lua_State* L)
             def("cine_cam", &cine_cam), def("cine_cam_off", &cine_cam_off), def("cine_cam_on", &cine_cam_on), // portal-mod E21
             def("cine_cam_up", &cine_cam_up), // portal-mod E48
             def("drone_fpv_hud", &drone_fpv_hud), // portal-mod E49
+            // portal-mod E53: the replay for filming (portal_mod_replay.cpp)
+            def("replay_record", &pm_replay::lua_record), def("replay_recording", &pm_replay::lua_recording), def("replay_ring", &pm_replay::lua_ring),
+            def("replay_save_ring", &pm_replay::lua_save_ring), def("replay_open", &pm_replay::lua_open_take), def("replay_close", &pm_replay::lua_close),
+            def("replay_active", &pm_replay::lua_active), def("replay_time", &pm_replay::lua_time), def("replay_length", &pm_replay::lua_length),
+            def("replay_seek", &pm_replay::lua_seek), def("replay_speed", &pm_replay::lua_speed), def("replay_pause", &pm_replay::lua_pause),
+            def("replay_cam", &pm_replay::lua_cam), def("replay_cam_pos", &pm_replay::lua_cam_pos), def("replay_cam_dir", &pm_replay::lua_cam_dir),
+            def("replay_look_at", &pm_replay::lua_look_at), def("replay_eye", &pm_replay::lua_eye), def("replay_key_add", &pm_replay::lua_key_add),
+            def("replay_key_clear", &pm_replay::lua_key_clear), def("replay_key_count", &pm_replay::lua_key_count), def("replay_path_play", &pm_replay::lua_path_play),
+            def("replay_path_playing", &pm_replay::lua_path_playing), def("replay_path_save", &pm_replay::lua_path_save), def("replay_path_load", &pm_replay::lua_path_load),
+            def("replay_hint", &pm_replay::lua_hint), def("replay_clock", &pm_replay::lua_clock), def("replay_info", &pm_replay::lua_info),
+            def("replay_object_pos", &pm_replay::lua_object_pos), def("replay_last", &pm_replay::lua_last),
+            // portal-mod E53c: the bullet camera
+            def("replay_bullet_cam", &pm_replay::lua_bullet_cam), def("replay_bullet_cam_at", &pm_replay::lua_bullet_cam_at),
+            def("replay_bullet_cam_state", &pm_replay::lua_bullet_cam_state),
             def("actor_arm_aim", &actor_arm_aim), // portal-mod E34
             def("actor_tp_dual", &actor_tp_dual), // portal-mod E36
             def("portal_pose_object", &portal_pose_object), // portal-mod E41

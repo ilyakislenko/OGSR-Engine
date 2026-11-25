@@ -204,6 +204,9 @@ void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
     // Traverse frustums
     for (auto spatial : lstRenderables)
     {
+        if (portal_mod_replay && !(spatial->spatial.type & PORTAL_MOD_STYPE_REPLAY))
+            continue; // portal-mod E53: a replay draws only its puppets and particles
+
         const auto& sector_id = spatial->spatial.sector_id;
         if (sector_id == IRender_Sector::INVALID_SECTOR_ID)
         {

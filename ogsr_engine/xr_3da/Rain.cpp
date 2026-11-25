@@ -109,14 +109,15 @@ void CEffect_Rain::RenewItem(Item& dest, float height, BOOL bHit)
     dest.uv_set = Random.randI(2);
     if (bHit)
     {
-        dest.dwTime_Life = Device.dwTimeGlobal + iFloor(1000.f * height / dest.fSpeed) - Device.dwTimeDelta;
-        dest.dwTime_Hit = Device.dwTimeGlobal + iFloor(1000.f * height / dest.fSpeed) - Device.dwTimeDelta;
+        // portal-mod E53b: the rain's clock (the replay's over a replay)
+        dest.dwTime_Life = PM_RAIN_MS + iFloor(1000.f * height / dest.fSpeed) - PM_RAIN_DMS;
+        dest.dwTime_Hit = PM_RAIN_MS + iFloor(1000.f * height / dest.fSpeed) - PM_RAIN_DMS;
         dest.Phit.mad(dest.P, dest.D, height);
     }
     else
     {
-        dest.dwTime_Life = Device.dwTimeGlobal + iFloor(1000.f * height / dest.fSpeed) - Device.dwTimeDelta;
-        dest.dwTime_Hit = Device.dwTimeGlobal + iFloor(2 * 1000.f * height / dest.fSpeed) - Device.dwTimeDelta;
+        dest.dwTime_Life = PM_RAIN_MS + iFloor(1000.f * height / dest.fSpeed) - PM_RAIN_DMS;
+        dest.dwTime_Hit = PM_RAIN_MS + iFloor(2 * 1000.f * height / dest.fSpeed) - PM_RAIN_DMS;
         dest.Phit.set(dest.P);
     }
 }

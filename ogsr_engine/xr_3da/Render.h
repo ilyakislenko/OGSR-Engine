@@ -23,6 +23,17 @@ extern const float fLightSmoothFactor;
 
 //////////////////////////////////////////////////////////////////////////
 // definition (Dynamic Light)
+// portal-mod E53: a dynamic light as the replay records it (IRender::portal_mod_lights)
+struct PORTAL_MOD_LIGHT_SNAP
+{
+    const void* id;
+    int type;
+    Fvector position, direction, right;
+    float range, cone, virtual_size;
+    Fcolor color;
+    bool shadow, volumetric;
+};
+
 class ENGINE_API IRender_Light : public xr_resource
 {
 public:
@@ -74,6 +85,7 @@ public:
     virtual bool get_moveable() = 0;
 
     virtual ~IRender_Light();
+    bool portal_mod_replay_light{}; // portal-mod E53: a replay's light (drawn while the live dynamic ones are not)
 };
 struct ENGINE_API resptrcode_light : public resptr_base<IRender_Light>
 {
@@ -222,6 +234,8 @@ public:
     virtual void Calculate() = 0;
     virtual void Render() = 0;
     virtual void RenderPortalView(const Fvector& pos, const Fvector& dir, const Fvector& top, const Fplane& clip) {} // portal-mod E2
+    // portal-mod E53: the dynamic lights around a point, for the replay's recorder (the R4 renderer fills it)
+    virtual void portal_mod_lights(xr_vector<PORTAL_MOD_LIGHT_SNAP>& out, const Fvector& center, float radius) {}
     virtual void AfterWorldRender() = 0; //После рендеринга мира (перед UI ПДА)
     virtual void AfterUIRender() = 0; //После рендеринга UI. Вызывать только если нам нужно отрендерить кадр для пда.
 
@@ -384,6 +398,17 @@ ENGINE_API extern PORTAL_MOD_DRAW portal_mod_draw[2];
 ENGINE_API extern bool portal_mod_pass; // portal-mod E2: true while the renderer draws the view through a portal
 ENGINE_API extern bool portal_mod_view_prev; // portal-mod E19: last frame rendered a view through a portal
 ENGINE_API extern Fmatrix portal_mod_full_std; // portal-mod E2: that view's full transform without the oblique near plane
+
+constexpr u32 PORTAL_MOD_STYPE_REPLAY = 1u << 12; // portal-mod E53: a replay's renderable (spatial.type)
+ENGINE_API extern bool portal_mod_replay; // portal-mod E53: a replay plays: only its renderables and lights are drawn
+ENGINE_API extern float portal_mod_replay_shader_time; // portal-mod E53: the shaders' clock while the game's time stands
+ENGINE_API extern u32 portal_mod_replay_rain_ms; // portal-mod E53b: the rain's clock over a replay (ms of the replay's time)
+ENGINE_API extern u32 portal_mod_replay_rain_dms; // portal-mod E53b: ... and this frame's step of it
+ENGINE_API extern float portal_mod_replay_rain_dt; // portal-mod E53b: ... in seconds
+ENGINE_API extern Fvector portal_mod_replay_wind; // portal-mod E53b: the grass's wind (CEnvironment::wind_anim) as recorded
+#define PM_RAIN_MS (portal_mod_replay ? portal_mod_replay_rain_ms : Device.dwTimeGlobal) // portal-mod E53b
+#define PM_RAIN_DMS (portal_mod_replay ? portal_mod_replay_rain_dms : Device.dwTimeDelta)
+#define PM_RAIN_DT (portal_mod_replay ? portal_mod_replay_rain_dt : Device.fTimeDelta)
 
 extern Fvector4 ps_ssfx_grass_interactive;
 extern Fvector4 ps_ssfx_int_grass_params_2;

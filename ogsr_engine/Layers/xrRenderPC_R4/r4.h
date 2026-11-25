@@ -318,6 +318,7 @@ public:
     virtual void OnFrame();
 
     void RenderPortalView(const Fvector& pos, const Fvector& dir, const Fvector& top, const Fplane& clip) override; // portal-mod E2
+    void portal_mod_lights(xr_vector<PORTAL_MOD_LIGHT_SNAP>& out, const Fvector& center, float radius) override; // portal-mod E53
     void portal_mod_projection(bool standard, CBackend* only = nullptr); // portal-mod E6: `only` = mid-pass switch
     Fmatrix portal_mod_P_std{}, portal_mod_P_obl{};
     void AfterWorldRender() override; //Вызывается после рендера мира и перед UI ПДА

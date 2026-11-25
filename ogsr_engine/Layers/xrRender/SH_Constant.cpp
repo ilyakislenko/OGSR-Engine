@@ -11,7 +11,7 @@ void CConstant::Calculate()
     if (modeProgrammable == dwMode)
         return;
 
-    const float t = Device.fTimeGlobal;
+    const float t = portal_mod_replay ? portal_mod_replay_shader_time : Device.fTimeGlobal; // portal-mod E53
     set_float(_R.Calculate(t), _G.Calculate(t), _B.Calculate(t), _A.Calculate(t));
 }
 

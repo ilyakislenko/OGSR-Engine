@@ -129,6 +129,7 @@ public:
 
     virtual void SetHudMode(BOOL b);
     virtual BOOL GetHudMode();
+    void PmSetAhead(float ms) override; // portal-mod E53b
 
     virtual float GetTimeLimit()
     {

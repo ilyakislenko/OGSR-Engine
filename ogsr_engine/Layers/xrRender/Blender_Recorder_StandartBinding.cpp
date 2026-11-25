@@ -191,7 +191,7 @@ static class cl_times final : public R_constant_setup
 {
     void setup(CBackend& cmd_list, R_constant* C) override
     {
-        const float t = Device.fTimeGlobal;
+        const float t = portal_mod_replay ? portal_mod_replay_shader_time : Device.fTimeGlobal; // portal-mod E53: shaders run over a replay
         cmd_list.set_c(C, t, t * 10, t / 10, _sin(t));
     }
 } binder_times;
