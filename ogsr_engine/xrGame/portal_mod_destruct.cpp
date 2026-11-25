@@ -25,6 +25,7 @@
 #include <queue>
 #include "portal_mod_destruct.h"
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
+#include "portal_mod_props.h" // portal-mod E57: breakable props (their update and reset ride on this module's)
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "ParticlesObject.h"
@@ -846,13 +847,22 @@ bool fx_allowed()
     return S.fx_count++ < (u32)C.max_fx;
 }
 
+// E57: a looped system (destroy_wood_00 is one) cannot remove itself: fx_at stops it after a while and destroys it
+// once its particles have lived out
+struct LoopFx
+{
+    CParticlesObject* ps;
+    u32 stop_at, kill_at;
+};
+xr_vector<LoopFx> loop_fx;
+
 void play_fx(const xr_vector<shared_str>& names, const Fvector& pos, const Fvector& dir)
 {
     if (names.empty() || !fx_allowed())
         return;
     if (pos.distance_to_sqr(Device.vCameraPosition) > 250.f * 250.f)
         return;
-    CParticlesObject* ps = CParticlesObject::Create(names[::Random.randI(names.size())].c_str(), TRUE);
+    LPCSTR name = names[::Random.randI(names.size())].c_str();
     Fmatrix m;
     m.identity();
     Fvector d = dir;
@@ -862,8 +872,7 @@ void play_fx(const xr_vector<shared_str>& names, const Fvector& pos, const Fvect
     m.k.set(d);
     Fvector::generate_orthonormal_basis(m.k, m.j, m.i);
     m.c.set(pos);
-    ps->UpdateParent(m, {});
-    GamePersistent().ps_needtoplay.push_back(ps);
+    portal_mod_destruct::fx_at(name, m); // E57: a looped system too
 }
 
 void play_snd(xr_vector<ref_sound>& snd, const Fvector& pos, float vol)
@@ -2936,6 +2945,7 @@ bool hole_pass(const Fvector& p) { return !S.holes.empty() && hole_contains(p, 0
 
 void explosion(const Fvector& pos, float radius, float hit, float impulse)
 {
+    portal_mod_props::explosion(pos, radius, hit, impulse); // E57: the props round it (their own switch)
     if (!C.enabled || !portal_mod_feat::enabled(portal_mod_feat::destruct) || radius <= 0.f) // portal-mod E55
         return;
     blast_dents(pos, radius, hit); // E56: the faces round it, on any level
@@ -3114,17 +3124,61 @@ void frame()
 }
 } // namespace prof
 
+// E57: plays a particle system once at m. One with a time limit removes itself; a looped one plays loop_ms, is
+// stopped (deferred: its particles live out) and destroyed when it has died out, or kill_ms after it began
+void fx_at(LPCSTR name, const Fmatrix& m)
+{
+    if (!name || !*name)
+        return;
+    CParticlesObject* ps = CParticlesObject::Create(name, FALSE);
+    ps->UpdateParent(m, {});
+    if (ps->IsLooped())
+        loop_fx.push_back({ps, Device.dwTimeGlobal + 1200, Device.dwTimeGlobal + 8000});
+    else
+        ps->SetAutoRemove(true);
+    GamePersistent().ps_needtoplay.push_back(ps);
+}
+
+namespace
+{
+void fx_tick()
+{
+    const u32 now = Device.dwTimeGlobal;
+    for (u32 i = 0; i < loop_fx.size();)
+    {
+        LoopFx& f = loop_fx[i];
+        if (f.stop_at && now >= f.stop_at)
+        {
+            f.ps->Stop(TRUE);
+            f.stop_at = 0;
+        }
+        else if (!f.stop_at && (now >= f.kill_at || !f.ps->IsPlaying()))
+        {
+            CParticlesObject::Destroy(f.ps);
+            f = loop_fx.back();
+            loop_fx.pop_back();
+            continue;
+        }
+        ++i;
+    }
+}
+} // namespace
+
 void update()
 {
     prof::frame(); // E54e
+    if (!portal_mod_replay && !loop_fx.empty())
+        fx_tick(); // E57
     if (!prof::on)
     {
         update_body();
+        portal_mod_props::update(); // E57
         return;
     }
     CTimer t;
     t.Start();
     update_body();
+    portal_mod_props::update(); // E57
     prof::upd = t.GetElapsed_sec() * 1000.f;
 }
 
@@ -3141,6 +3195,8 @@ void shutdown()
 {
     stash(); // E54d: the level's destruction kept for when the player comes back (or the game is saved elsewhere)
     reset();
+    portal_mod_props::reset(); // E57: the props' pieces' bodies go before the physics world too
+    loop_fx.clear(); // E57: the level's end destroys every particle system itself
 }
 
 void save_game(LPCSTR sav_path)
@@ -3174,6 +3230,8 @@ void load_game(LPCSTR sav_path)
 {
     ++G.gen;
     G.levels.clear();
+    portal_mod_props::reset(); // E57: the props come back with the save's objects, their pieces go
+    loop_fx.clear(); // E57: a save loaded destroys the systems (remove_on_game_load)
     if (!sav_path || !*sav_path)
         return;
     string_path fn;
@@ -3262,6 +3320,13 @@ Fvector lua_piece_pos(int id)
 }
 
 int lua_piece_state(int id) { return id < 0 || id >= (int)S.pieces.size() ? -1 : S.pieces[id].state; }
+
+// E57: splinters off a breakable prop where a round hit it (cls: 0 concrete, 1 brick, 2 wood)
+void chips(const Fvector& point, const Fvector& normal, const Fvector& dir, float dmg, int cls)
+{
+    if (C.enabled && portal_mod_feat::enabled(portal_mod_feat::destruct) && cls >= 0 && cls < NMAT)
+        chips_at(point, normal, dir, dmg, u8(cls));
+}
 
 void lua_chips(const Fvector& pos, const Fvector& normal, float damage) { if (portal_mod_feat::enabled(portal_mod_feat::destruct)) /* portal-mod E55 */ chips_at(pos, normal, Fvector().invert(normal), damage, 0); }
 
@@ -3358,12 +3423,10 @@ int lua_demolish(const Fvector& pos, float radius, float y_lo, float y_hi)
     {
         if (!C.fx_demolish.empty())
         {
-            CParticlesObject* ps = CParticlesObject::Create(C.fx_demolish[::Random.randI(C.fx_demolish.size())].c_str(), TRUE);
             Fmatrix m;
             m.identity();
             m.c = q;
-            ps->UpdateParent(m, {});
-            GamePersistent().ps_needtoplay.push_back(ps);
+            fx_at(C.fx_demolish[::Random.randI(C.fx_demolish.size())].c_str(), m); // E57
         }
         if (S.snd_demolish._handle())
         {

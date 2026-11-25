@@ -17,6 +17,8 @@ float ammo_damage(LPCSTR ammo_section); // [pm_destruct_ammo]: what one round do
 void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& normal, u16 target_material); // main thread
 void explosion(const Fvector& pos, float radius, float hit, float impulse); // CExplosive::Explode
 bool hole_pass(const Fvector& p); // E54b: a point at the level inside an open hole (a bullet flies on)
+void chips(const Fvector& point, const Fvector& normal, const Fvector& dir, float dmg, int cls); // E57: splinters off a prop (cls: 0 concrete, 1 brick, 2 wood)
+void fx_at(LPCSTR name, const Fmatrix& m); // E57: a particle system once at m (a looped one is stopped and destroyed in time)
 void update(); // CLevel::OnFrame
 void shutdown(); // CLevel::~CLevel (before the physics world goes)
 // E54d: what was destroyed on each level (pieces, bonds, falling islands, holes) is kept across level changes and

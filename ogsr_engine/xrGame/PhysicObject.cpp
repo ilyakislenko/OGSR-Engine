@@ -7,10 +7,18 @@
 #include "..\Include/xrRender/KinematicsAnimated.h"
 #include "../xr_3da/xr_collide_form.h"
 #include "game_object_space.h"
+#include "portal_mod_props.h" // portal-mod E57: breakable props
 
 #ifdef ANIMATED_PHYSICS_OBJECT_SUPPORT
 #include "PhysicsShellAnimator.h"
 #endif
+
+// portal-mod E57: the impulse as before (CPhysicsShellHolder::Hit), then the damage that may break it
+void CPhysicObject::Hit(SHit* pHDS)
+{
+    inherited::Hit(pHDS);
+    portal_mod_props::hit(this, *pHDS);
+}
 
 CPhysicObject::CPhysicObject(void)
 {

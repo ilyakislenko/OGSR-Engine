@@ -32,6 +32,7 @@ public:
     virtual void Load(LPCSTR section);
     virtual void shedule_Update(u32 dt); //
     virtual void UpdateCL();
+    virtual void Hit(SHit* pHDS); // portal-mod E57: breakable props (portal_mod_props.cpp)
     virtual void net_Save(NET_Packet& P);
     virtual BOOL net_SaveRelevant();
     virtual BOOL UsedAI_Locations();
