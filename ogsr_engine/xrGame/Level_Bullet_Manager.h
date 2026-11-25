@@ -69,6 +69,8 @@ struct SBullet
     u32 pm_id{};
     u32 pm_tau{};
     float pm_frac{};
+    float pm_destruct{}; // portal-mod E54: what the round does to a wall ([pm_destruct_ammo])
+
 public:
     SBullet();
     ~SBullet();

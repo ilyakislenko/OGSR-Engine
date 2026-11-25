@@ -620,9 +620,50 @@ static HRESULT create_shader(LPCSTR const pTarget, DWORD const* buffer, u32 cons
 }
 
 //--------------------------------------------------------------------------------------------------------------
+static const char* PM_HOLES_HLSL =
+    "// portal-mod E54b: holes shot through thin walls (xrGame/portal_mod_destruct.cpp): view-space spheres, radius 0 - none.\n"
+    "// Only the level's own geometry (the identity world matrix) and a building's standing pieces (drawn scaled 1.0001).\n"
+    "uniform float4 pm_holes[32];\n"
+    "void pm_hole_clip(float3 P, inout float4 col)\n"
+    "{\n"
+    "    float3 ax = float3(m_W._11, m_W._21, m_W._31);\n"
+    "    float s2 = dot(ax, ax);\n"
+    "    bool level_geom = (abs(m_W._14) + abs(m_W._24) + abs(m_W._34)) == 0.0 || abs(s2 - 1.0002) < 0.00004;\n"
+    "    if (!level_geom)\n"
+    "        return;\n"
+    "    float rim = 1.0;\n"
+    "    [unroll] for (int i = 0; i < 32; ++i)\n"
+    "    {\n"
+    "        float4 h = pm_holes[i];\n"
+    "        if (h.w > 0.0)\n"
+    "        {\n"
+    "            float d = distance(P, h.xyz);\n"
+    "            clip(d - h.w);\n"
+    "            rim = min(rim, saturate((d - h.w) / (0.35 * h.w + 0.02)));\n"
+    "        }\n"
+    "    }\n"
+    "    col.rgb *= lerp(0.25, 1.0, rim * rim);\n"
+    "}\n\n";
+
+// pack_gbuffer gets the clip at its start, the helper before it
+static void portal_mod_holes_shader(xr_string& s)
+{
+    const char* sig = "f_deffer pack_gbuffer(float4 norm, float4 pos, float4 col)";
+    const size_t at = s.find(sig);
+    const size_t brace = at == xr_string::npos ? at : s.find('{', at);
+    if (brace == xr_string::npos)
+    {
+        Msg("! [portal-mod E54b] common_functions.h has no pack_gbuffer(norm, pos, col): wall holes are not drawn");
+        return;
+    }
+    s.insert(brace + 1, "\n    pm_hole_clip(pos.xyz, col);\n");
+    s.insert(at, PM_HOLES_HLSL);
+}
+
 class includer final : public ID3DInclude
 {
     IReader* R{};
+    xr_string pm_src; // portal-mod E54b
 
 public:
     HRESULT __stdcall Open(D3D10_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes) override
@@ -639,6 +680,17 @@ public:
         }
 
         R->skip_bom(pFileName);
+
+        // portal-mod E54b: holes shot through walls - pack_gbuffer clips the level's geometry inside them
+        if (strstr(pFileName, "common_functions.h"))
+        {
+            pm_src.assign(static_cast<const char*>(R->pointer()), R->elapsed());
+            FS.r_close(R);
+            portal_mod_holes_shader(pm_src);
+            *ppData = pm_src.data();
+            *pBytes = (UINT)pm_src.size();
+            return D3D_OK;
+        }
 
         *ppData = R->pointer();
         *pBytes = R->elapsed();

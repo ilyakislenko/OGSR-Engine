@@ -78,14 +78,14 @@ void TTestDepthCallback(bool& do_colide, bool bo1, dContact& c, SGameMtl* materi
             dxGeomUserData* ud1 = retrieveGeomUserData(c.geom.g1);
             dxGeomUserData* ud2 = retrieveGeomUserData(c.geom.g2);
 
-            if (ud1)
+            if (ud1 && ud1->ph_ref_object) // portal-mod E54: a body without an object
             {
                 CPhysicsShell* phsl = ud1->ph_ref_object->PPhysicsShell();
                 if (phsl)
                     phsl->Enable();
             }
 
-            if (ud2)
+            if (ud2 && ud2->ph_ref_object)
             {
                 CPhysicsShell* phsl = ud2->ph_ref_object->PPhysicsShell();
                 if (phsl)

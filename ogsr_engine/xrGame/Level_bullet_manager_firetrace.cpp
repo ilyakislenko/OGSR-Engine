@@ -19,6 +19,7 @@
 #include "../xrcdb/xr_collide_defs.h"
 #include "weapon.h"
 #include "ai/monsters/BaseMonster/base_monster.h"
+#include "portal_mod_destruct.h" // portal-mod E54
 
 //константы shoot_factor, определяющие
 //поведение пули при столкновении с объектом
@@ -180,7 +181,9 @@ BOOL CBulletManager::firetrace_callback(collide::rq_result& result, LPVOID param
         hit_material_idx = T->material;
 
         SGameMtl* mtl = GMLib.GetMaterialByIdx(hit_material_idx);
-        if (fsimilar(mtl->fShootFactor, 1.0f, EPS)) //Если материал полностью простреливаемый
+        if (portal_mod_destruct::hole_pass(end_point)) // portal-mod E54b: through a hole shot in the wall
+            pData->bStopTracing = false;
+        else if (fsimilar(mtl->fShootFactor, 1.0f, EPS)) //Если материал полностью простреливаемый
         {
             pData->bStopTracing = false;
         }
@@ -264,6 +267,7 @@ void CBulletManager::FireShotmark(SBullet* bullet, const Fvector& vDir, const Fv
 
 void CBulletManager::StaticObjectHit(CBulletManager::_event& E)
 {
+    portal_mod_destruct::bullet_hit(E.bullet, (u32)E.R.element, E.point, E.normal, E.tgt_material); // portal-mod E54: chips, a piece's damage
     //	Fvector hit_normal;
     FireShotmark(&E.bullet, E.bullet.dir, E.point, E.R, E.tgt_material, E.normal,
                  (E.bullet.hit_type == ALife::eHitTypeFireWound || E.bullet.hit_type == ALife::eHitTypeWound || E.bullet.hit_type == ALife::eHitTypeWound_2));

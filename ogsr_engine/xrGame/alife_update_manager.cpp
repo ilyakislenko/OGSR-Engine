@@ -17,6 +17,7 @@
 #include "ef_storage.h"
 #include "xrserver.h"
 #include "level.h"
+#include "portal_mod_destruct.h" // portal-mod E54d: the destruction beside the saved game
 #include "graph_engine.h"
 #include "../xr_3da/x_ray.h"
 #include "restriction_space.h"
@@ -211,6 +212,7 @@ void CALifeUpdateManager::new_game(LPCSTR save_name)
 {
     g_pGamePersistent->LoadTitle("st_creating_new_game");
     Msg("* Creating new game...");
+    portal_mod_destruct::load_game(nullptr); // portal-mod E54d: a new game - nothing destroyed anywhere
 
     unload();
     reload(m_section);

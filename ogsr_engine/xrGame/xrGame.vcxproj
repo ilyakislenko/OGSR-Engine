@@ -1947,6 +1947,7 @@
     <ClCompile Include="GamePersistent.cpp" />
     <ClCompile Include="Level.cpp" />
     <ClCompile Include="portal_mod_replay.cpp" /><!-- portal-mod E53 -->
+    <ClCompile Include="portal_mod_destruct.cpp" /><!-- portal-mod E54 -->
     <ClCompile Include="Level_input.cpp" />
     <ClCompile Include="Level_load.cpp" />
     <ClCompile Include="Level_network.cpp" />

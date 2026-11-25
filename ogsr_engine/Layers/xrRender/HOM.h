@@ -7,6 +7,9 @@
 
 class occTri;
 
+// portal-mod E54b: a hole shot through a wall near the camera (the occluders would hide what is seen through it)
+extern bool portal_mod_holes_near;
+
 class CHOM : public pureRender
 {
 private:
@@ -33,7 +36,7 @@ public:
     BOOL visible(sPoly& P);
 
     // portal-mod E2: no occlusion culling for the view through a portal (its results are cached per frame for the main camera)
-    bool Allowed() const { return !portal_mod_pass && !ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_HOM) && m_pModel; }
+    bool Allowed() const { return !portal_mod_pass && !portal_mod_holes_near && !ps_r2_ls_flags_ext.test(R2FLAGEXT_DISABLE_HOM) && m_pModel; }
 
     CHOM();
     ~CHOM();

@@ -30,6 +30,7 @@
 #include "map_location.h"
 #include "portal_mod.h" // portal-mod E10
 #include "portal_mod_replay.h" // portal-mod E53
+#include "portal_mod_destruct.h" // portal-mod E54
 #include "phworld.h"
 #include "../xrcdb/xr_collide_defs.h"
 #include "script_rq_result.h"
@@ -1759,6 +1760,15 @@ void CLevel::script_register(lua_State* L)
             def("cine_cam", &cine_cam), def("cine_cam_off", &cine_cam_off), def("cine_cam_on", &cine_cam_on), // portal-mod E21
             def("cine_cam_up", &cine_cam_up), // portal-mod E48
             def("drone_fpv_hud", &drone_fpv_hud), // portal-mod E49
+            def("destruct_info", &portal_mod_destruct::lua_info), // portal-mod E54
+            def("destruct_profile", &portal_mod_destruct::lua_profile), // portal-mod E54e: frame times by part in the log
+            def("destruct_crush_immune", &portal_mod_destruct::lua_crush_immune), // portal-mod E54e: falling pieces spare it
+            def("destruct_demolish", &portal_mod_destruct::lua_demolish), // portal-mod E54e: the supports in a band go at once
+            def("destruct_explode", &portal_mod_destruct::lua_explode), def("destruct_piece_at", &portal_mod_destruct::lua_piece_at),
+            def("destruct_piece_pos", &portal_mod_destruct::lua_piece_pos), def("destruct_piece_state", &portal_mod_destruct::lua_piece_state),
+            def("destruct_chips", &portal_mod_destruct::lua_chips),
+            def("destruct_hole_at", &portal_mod_destruct::lua_hole_at), // portal-mod E54b
+            def("destruct_wall_probe", &portal_mod_destruct::lua_wall_probe), // portal-mod E54b
             // portal-mod E53: the replay for filming (portal_mod_replay.cpp)
             def("replay_record", &pm_replay::lua_record), def("replay_recording", &pm_replay::lua_recording), def("replay_ring", &pm_replay::lua_ring),
             def("replay_save_ring", &pm_replay::lua_save_ring), def("replay_open", &pm_replay::lua_open_take), def("replay_close", &pm_replay::lua_close),

@@ -21,6 +21,7 @@
 #include "xrmessages.h"
 #include "../xr_3da/gamemtllib.h"
 #include "clsid_game.h"
+#include "portal_mod_destruct.h" // portal-mod E54
 #ifdef DEBUG
 #include "../xr_3da/StatGraph.h"
 #include "PHDebug.h"
@@ -335,6 +336,8 @@ void CExplosive::Explode()
     g_pGamePersistent->GrassBendersAddExplosion(cast_game_object()->ID(), pos, {0, -99, 0}, 1.33f, ps_ssfx_int_grass_params_2.y, ps_ssfx_int_grass_params_2.x, m_fBlastRadius * 2.0f);
 
     //	Msg("---------CExplosive Explode [%d] frame[%d]",cast_game_object()->ID(), Device.dwFrame);
+    portal_mod_destruct::explosion(pos, m_fBlastRadius, m_fBlastHit, m_fBlastHitImpulse); // portal-mod E54: a building's pieces
+
     OnBeforeExplosion();
     //играем звук взрыва
     CObject* who = nullptr;

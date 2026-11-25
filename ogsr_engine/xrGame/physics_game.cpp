@@ -211,7 +211,7 @@ void TContactShotMark(CDB::TRI* T, dContactGeom* c)
                     CPHFindParticlesComparer find(cast_fv(c->pos), data->ph_ref_object);
                     if (!Level().ph_commander().has_call(&find, &find))
                     {
-                        MsgDbg("! Adding collide particle for obj id=%d", data->ph_ref_object->ID());
+                        MsgDbg("! Adding collide particle for obj id=%d", data->ph_ref_object ? data->ph_ref_object->ID() : u16(-1)); // portal-mod E54
                         Level().ph_commander().add_call(xr_new<CPHParticlesCondition>(), xr_new<CPHParticlesPlayCall>(*c, b_invert_normal, ps_name, data->ph_ref_object));
                     }
                     else

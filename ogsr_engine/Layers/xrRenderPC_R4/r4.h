@@ -166,6 +166,8 @@ private:
 
     render_main r_main;
     render_sun r_sun;
+    friend void portal_mod_render_stats(u32* out); // portal-mod E54e: the sun cascades' draw calls for the profiler
+    friend int portal_mod_sun_cascade(u32 context_id); // portal-mod E54e: which sun cascade a context draws
     render_rain r_rain;
 
 private:

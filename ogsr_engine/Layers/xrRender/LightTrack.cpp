@@ -9,6 +9,18 @@
 #include "../../xr_3da/igame_persistent.h"
 #include "../../xr_3da/environment.h"
 
+// portal-mod E54c: a destructible building's piece (xrGame/portal_mod_destruct.cpp sets pROS_Allowed to 2) traces no light:
+// its rays started inside it and the pieces' triangles are in the static collision model, so it drew black in shade, and
+// past them each piece took its own share of sky from wherever its middle was - a patchwork of light and dark cells.
+// Every piece takes the open sky, scaled by [pm_destruct] light_sky (the level's lightmaps have the building's own shade in
+// them, the open sky alone drew it white), and the sun; the sun's shadow maps still have them shade each other.
+static thread_local bool pm_ros_piece{};
+static float pm_ros_piece_sky()
+{
+    static const float k = pSettings->line_exist("pm_destruct", "light_sky") ? pSettings->r_float("pm_destruct", "light_sky") : 0.55f;
+    return k;
+}
+
 //////////////////////////////////////////////////////////////////////
 // Construction/Destruction
 //////////////////////////////////////////////////////////////////////
@@ -151,6 +163,7 @@ void CROS_impl::update(IRenderable* O)
     }
 
     const bool bFirstTime = (0 == result_count);
+    pm_ros_piece = O->renderable.pROS_Allowed == 2; // portal-mod E54c
     calc_sun_value(position, _object);
     calc_sky_hemi_value(position, _object);
 
@@ -319,7 +332,7 @@ void CROS_impl::calc_sun_value(const Fvector& position, const CObject* _object)
             result_sun += ::Random.randI(lt_hemisamples / 4, lt_hemisamples / 2);
             Fvector direction;
             direction.set(sun->direction).invert().normalize();
-            sun_value = !(g_pGameLevel->ObjectSpace.RayTest(position, direction, 500.f, collide::rqtBoth, &cache_sun, _object)) ? 1.f : 0.f;
+            sun_value = pm_ros_piece || !(g_pGameLevel->ObjectSpace.RayTest(position, direction, 500.f, collide::rqtBoth, &cache_sun, _object)) ? 1.f : 0.f; // portal-mod E54c
         }
     }
 }
@@ -350,7 +363,7 @@ void CROS_impl::calc_sky_hemi_value(const Fvector& position, const CObject* _obj
             Fvector direction;
             direction.set(hdir[sample][0], hdir[sample][1], hdir[sample][2]).normalize();
             //.			result[sample]	=	!g_pGameLevel->ObjectSpace.RayTest(position,direction,50.f,collide::rqtBoth,&cache[sample],_object);
-            result[sample] = !g_pGameLevel->ObjectSpace.RayTest(position, direction, 50.f, collide::rqtStatic, &cache[sample], _object);
+            result[sample] = pm_ros_piece || !g_pGameLevel->ObjectSpace.RayTest(position, direction, 50.f, collide::rqtStatic, &cache[sample], _object); // portal-mod E54c
             //	Msg				("%d:-- %s",sample,result[sample]?"true":"false");
         }
     }
@@ -362,13 +375,13 @@ void CROS_impl::calc_sky_hemi_value(const Fvector& position, const CObject* _obj
         if (result[it])
             _pass++;
     hemi_value = static_cast<float>(_pass) / static_cast<float>(result_count ? result_count : 1);
-    hemi_value *= ps_r2_dhemi_sky_scale;
+    hemi_value *= ps_r2_dhemi_sky_scale * (pm_ros_piece ? pm_ros_piece_sky() : 1.f); // portal-mod E54c
 
     for (int it = 0; it < result_count; it++)
     {
         if (result[it])
         {
-            accum_hemi(hemi_cube, Fvector3().set(hdir[it][0], hdir[it][1], hdir[it][2]), ps_r2_dhemi_sky_scale);
+            accum_hemi(hemi_cube, Fvector3().set(hdir[it][0], hdir[it][1], hdir[it][2]), ps_r2_dhemi_sky_scale * (pm_ros_piece ? pm_ros_piece_sky() : 1.f)); // portal-mod E54c
         }
     }
 }

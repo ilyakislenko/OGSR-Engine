@@ -6,6 +6,7 @@
 #include "Level.h"
 #include "Level_Bullet_Manager.h"
 #include "portal_mod_replay.h" // portal-mod E53
+#include "portal_mod_destruct.h" // portal-mod E54
 #include "game_cl_base.h"
 #include "Actor.h"
 #include "gamepersistent.h"
@@ -156,6 +157,7 @@ SBullet& CBulletManager::AddBullet(const Fvector& position, const Fvector& direc
     bullet.frame_num = Device.dwFrame;
     bullet.flags.aim_bullet = AimBullet;
     bullet.pm_id = pm_replay::bullet_born(bullet, sender_id, sendersweapon_id, cartridge.m_ammoSect.c_str()); // portal-mod E53b, portal-mod E53c: its ammo
+    bullet.pm_destruct = portal_mod_destruct::ammo_damage(cartridge.m_ammoSect.c_str()); // portal-mod E54
     return bullet;
 }
 

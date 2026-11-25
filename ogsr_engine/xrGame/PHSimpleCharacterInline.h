@@ -117,8 +117,16 @@ void CPHSimpleCharacter::UpdateDynamicDamage(dContact* c, u16 obj_material_idx, 
     if (c_vel > m_collision_damage_info.m_contact_velocity)
     {
         CPhysicsShellHolder* obj = bo1 ? retrieveRefObject(c->geom.g2) : retrieveRefObject(c->geom.g1);
-        VERIFY(obj);
-        if (!obj->getDestroy())
+        if (!obj) // portal-mod E54: a body without an object (a piece of a building) hits like the ground
+        {
+            m_collision_damage_info.m_contact_velocity = c_vel;
+            m_collision_damage_info.m_dmc_signum = bo1 ? 1.f : -1.f;
+            m_collision_damage_info.m_dmc_type = SCollisionDamageInfo::ctStatic;
+            m_collision_damage_info.m_damege_contact = *c;
+            m_collision_damage_info.m_hit_callback = nullptr;
+            m_collision_damage_info.m_obj_id = u16(-1);
+        }
+        else if (!obj->getDestroy())
         {
             m_collision_damage_info.m_contact_velocity = c_vel;
             m_collision_damage_info.m_dmc_signum = bo1 ? 1.f : -1.f;

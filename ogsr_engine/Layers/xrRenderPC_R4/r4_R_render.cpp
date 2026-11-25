@@ -270,6 +270,14 @@ void CRender::main_pass_dynamic(R_dsgraph_structure& dsgraph, bool fill_lights)
     }
 }
 
+struct PortalModIbJob // portal-mod E54 (r4_loader.cpp)
+{
+    bool fast;
+    u32 ib;
+    xr_vector<u16> data;
+};
+extern xr_vector<PortalModIbJob> portal_mod_ib_jobs;
+
 void CRender::Render()
 {
     ZoneScoped;
@@ -280,6 +288,17 @@ void CRender::Render()
     auto& cmd_list = dsgraph.cmd_list;
 
     PIX_EVENT(CRender_Render);
+
+    if (!portal_mod_ib_jobs.empty()) // portal-mod E54: a destructible building's own triangles out of the level's index buffers
+    {
+        for (const auto& j : portal_mod_ib_jobs)
+        {
+            auto& v = j.fast ? xIB : nIB;
+            if (j.ib < v.size() && v[j.ib])
+                HW.get_context(CHW::IMM_CTX_ID)->UpdateSubresource(v[j.ib], 0, nullptr, j.data.data(), 0, 0);
+        }
+        portal_mod_ib_jobs.clear();
+    }
 
     VERIFY(0 == mapDistort.size());
 

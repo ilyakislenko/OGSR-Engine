@@ -187,6 +187,9 @@ int CObjectSpace::GetNearest(xr_vector<CObject*>& q_nearest, ICollisionForm* obj
 //----------------------------------------------------------------------
 static void __stdcall build_callback(Fvector* V, const size_t Vcnt, CDB::TRI* T, const size_t Tcnt, void* params) { g_pGameLevel->Load_GameSpecific_CFORM(T, Tcnt); }
 
+// portal-mod E54: a destructible building's pieces in place of its own triangles (xrGame/portal_mod_destruct.cpp)
+bool portal_mod_destruct_cform(const Fvector* verts, size_t nv, const CDB::TRI* tris, size_t nt, xr_vector<Fvector>& out_v, xr_vector<CDB::TRI>& out_t);
+
 void CObjectSpace::Load()
 {
     IReader* F = FS.r_open(fsgame::level, fsgame::level_files::level_cform);
@@ -203,7 +206,12 @@ void CObjectSpace::Load()
     CTimer t_total;
 
     t_total.Start();
-    Static.build(verts, H.vertcount, tris, H.facecount, build_callback);
+    xr_vector<Fvector> pm_v; // portal-mod E54: a destructible building (levels\\<level>\\level.pmd)
+    xr_vector<CDB::TRI> pm_t;
+    if (portal_mod_destruct_cform(verts, H.vertcount, tris, H.facecount, pm_v, pm_t))
+        Static.build(pm_v.data(), pm_v.size(), pm_t.data(), pm_t.size(), build_callback);
+    else
+        Static.build(verts, H.vertcount, tris, H.facecount, build_callback);
     if (t_total.GetElapsed_ms() > 5)
     {
         MsgDbg("Long CObjectSpace::Load() !!! duration [%d]ms!", t_total.GetElapsed_ms());

@@ -22,6 +22,10 @@ ENGINE_API BOOL g_bRendering = FALSE;
 extern ENGINE_API float psHUD_FOV;
 
 u32 g_dwFPSlimit{};
+// portal-mod E54e: the last frame's parts (ms) - 0 the game's update (FrameMove), 1 the render (main thread), 2 the
+// second thread's tasks (the physics world, sound), 3 the main thread waiting for them; read by the destruction's profiler
+float g_pm_frame_ms[4]{};
+BOOL g_pm_stat_gather{}; // portal-mod E54e: the engine's stat timers run without the stats on screen
 
 BOOL g_bLoaded = FALSE;
 
@@ -245,7 +249,7 @@ void CRenderDevice::on_idle()
         const auto FrameStartTime = std::chrono::high_resolution_clock::now();
 #endif
 
-        if (psDeviceFlags.test(rsStatistic))
+        if (psDeviceFlags.test(rsStatistic) || g_pm_stat_gather) // portal-mod E54e
             g_bEnableStatGather = TRUE;
         else
             g_bEnableStatGather = FALSE;
@@ -257,7 +261,9 @@ void CRenderDevice::on_idle()
 
         // if (b_is_Active)
         {
+            const auto pm_t0 = std::chrono::high_resolution_clock::now(); // portal-mod E54e
             FrameMove();
+            g_pm_frame_ms[0] = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - pm_t0).count();
         }
 
         if (!g_loading_events.empty()) // that is to avoid loading screen flickering
@@ -311,6 +317,7 @@ void CRenderDevice::on_idle()
             SecondThreadTasksElapsedTime = SecondThreadTasksEndTime - SecondThreadTasksStartTime;
         });
 
+        const auto pm_r0 = std::chrono::high_resolution_clock::now(); // portal-mod E54e
         Statistic->RenderTOTAL_Real.FrameStart();
         Statistic->RenderTOTAL_Real.Begin();
 
@@ -339,6 +346,7 @@ void CRenderDevice::on_idle()
 
         Statistic->RenderTOTAL_Real.End();
         Statistic->RenderTOTAL_Real.FrameEnd();
+        g_pm_frame_ms[1] = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - pm_r0).count(); // portal-mod E54e
 
         Statistic->RenderTOTAL.accum = Statistic->RenderTOTAL_Real.accum;
 
@@ -370,6 +378,8 @@ void CRenderDevice::on_idle()
 
             const std::chrono::duration<double, std::milli> SecondThreadElapsedTime = SecondThreadEndTime - SecondThreadStartTime;
             SecondThreadFreeTimeLast = SecondThreadElapsedTime - SecondThreadTasksElapsedTime;
+            g_pm_frame_ms[2] = float(SecondThreadTasksElapsedTime.count()); // portal-mod E54e
+            g_pm_frame_ms[3] = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - SecondThreadEndTime).count();
 
 #ifdef LOG_SECOND_THREAD_STATS
             if (show_stats && dwPrecacheFrame == 0)

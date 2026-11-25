@@ -34,6 +34,7 @@
 #include "car.h"
 #include "portal_mod.h" // portal-mod E4
 #include "portal_mod_replay.h" // portal-mod E53
+#include "portal_mod_destruct.h" // portal-mod E54
 #include "PHShell.h"
 #include "PHObject.h"
 #include "Geometry.h"
@@ -144,6 +145,7 @@ CLevel::CLevel()
 CLevel::~CLevel()
 {
     pm_replay::shutdown(); // portal-mod E53: the replay closes, the recorder lets its buffer go
+    portal_mod_destruct::shutdown(); // portal-mod E54: the falling pieces' bodies go before the physics world
     xr_delete(g_player_hud);
     //	g_pGameLevel		= NULL;
     Msg("- Destroying level");
@@ -444,6 +446,7 @@ void CLevel::OnFrame()
     if (ps_lua_gc_method != gc_timeout)
         Device.add_to_seq_parallel(fastdelegate::MakeDelegate(this, &CLevel::script_gc));
 
+    portal_mod_destruct::update(); // portal-mod E54: the solver, falling pieces, chips
     pm_replay::on_frame(); // portal-mod E53: records the frame, or plays the open replay (its camera last)
 
     ShowEditor();

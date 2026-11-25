@@ -9,6 +9,25 @@
 
 #include "dxRenderDeviceRender.h"
 
+// portal-mod E54b: holes shot through thin walls (xrGame/portal_mod_destruct.cpp fills them every frame in world space:
+// centre, radius; radius 0 - none). The shaders get them in view space as pm_holes (r4.cpp injects the clip).
+Fvector4 portal_mod_holes[32]{};
+bool portal_mod_holes_near{};
+static class cl_pm_holes final : public R_constant_setup
+{
+    void setup(CBackend& cmd_list, R_constant* C) override
+    {
+        for (u32 i = 0; i < 32; ++i)
+        {
+            const Fvector4& h = portal_mod_holes[i];
+            Fvector v{};
+            if (h.w > 0.f)
+                cmd_list.xforms.m_v.transform_tiny(v, Fvector{h.x, h.y, h.z});
+            cmd_list.set_ca(C, i, v.x, v.y, v.z, h.w);
+        }
+    }
+} binder_pm_holes;
+
 // -- capture R_constant !!!
 #define BIND_DECLARE(xf) \
     static class cl_xform_##xf final : public R_constant_setup_cap \
@@ -904,6 +923,7 @@ void CBlender_Compile::SetMapping() const
     r_Constant("pos_decompression_params2", &binder_pos_decompress_params2);
 
     r_Constant("dev_mProject", &binder_mProject);
+    r_Constant("pm_holes", &binder_pm_holes); // portal-mod E54b
 
     // system.ltx common
     for (const auto& [name, s] : DEV->v_constant_setup)

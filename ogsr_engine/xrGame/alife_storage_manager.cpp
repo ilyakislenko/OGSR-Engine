@@ -20,6 +20,7 @@
 #include "alife_registry_container.h"
 #include "xrserver.h"
 #include "level.h"
+#include "portal_mod_destruct.h" // portal-mod E54d: the destruction beside the saved game
 
 #include "../xr_3da/IGame_Persistent.h"
 
@@ -83,6 +84,7 @@ void CALifeStorageManager::save(LPCSTR save_name, bool update_name)
     writer->w(dest_data, dest_count);
     xr_free(dest_data);
     FS.w_close(writer);
+    portal_mod_destruct::save_game(temp); // portal-mod E54d: <save>.sav.destruct - what was destroyed on each level
 #ifdef DEBUG
     Msg("* Game %s is successfully saved to file '%s' (%d bytes compressed to %d)", m_save_name, temp, source_count, dest_count + 4);
 #else // DEBUG
@@ -167,6 +169,7 @@ bool CALifeStorageManager::load(LPCSTR save_name)
     else
         rtc_decompress(source_data, source_count, stream->pointer(), stream->length() - 3 * sizeof(u32));
     FS.r_close(stream);
+    portal_mod_destruct::load_game(file_name); // portal-mod E54d: the destruction saved with it (none: nothing destroyed)
     load(source_data, source_count, file_name);
     xr_free(source_data);
 

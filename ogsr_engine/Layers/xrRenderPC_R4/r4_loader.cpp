@@ -243,6 +243,41 @@ void CRender::level_Unload()
     b_loaded = FALSE;
 }
 
+// portal-mod E54: a destructible building's own triangles leave the level's index buffers when it starts to come apart.
+// portal_mod_destruct_ib (xrGame/portal_mod_destruct.cpp) keeps a cut copy of the buffers it draws from; the game queues
+// them here and CRender::Render writes them at the start of the next frame.
+void portal_mod_destruct_ib(bool fast, u32 ib, u16* data, u32 count);
+struct PortalModIbJob
+{
+    bool fast;
+    u32 ib;
+    xr_vector<u16> data;
+};
+xr_vector<PortalModIbJob> portal_mod_ib_jobs;
+// portal-mod E54e: the last frame's draw calls for the destruction's profiler - the main context's calls, verts,
+// models' (dynamic) and level (static) calls, then each sun cascade's calls
+void portal_mod_render_stats(u32* out)
+{
+    const auto& m = RCache.stat;
+    out[0] = m.calls;
+    out[1] = m.verts;
+    out[2] = m.r.s_dynamic.draw_calls;
+    out[3] = m.r.s_static.draw_calls;
+    for (u32 i = 0; i < 3; ++i)
+        out[4 + i] = RImplementation.r_sun.stats[i].calls;
+}
+// portal-mod E54e: which sun cascade a render context draws (-1: none) - the destruction's small pieces skip the far ones
+int portal_mod_sun_cascade(u32 context_id)
+{
+    if (RImplementation.get_context(context_id).phase != CRender::PHASE_SMAP)
+        return -1;
+    for (int i = 0; i < R__NUM_SUN_CASCADES; ++i)
+        if (RImplementation.r_sun.contexts_ids[i] == context_id)
+            return i;
+    return -1;
+}
+void portal_mod_render_queue_ib(bool fast, u32 ib, const u16* data, u32 count) { portal_mod_ib_jobs.push_back(PortalModIbJob{fast, ib, xr_vector<u16>(data, data + count)}); }
+
 void CRender::LoadBuffers(CStreamReader* base_fs, BOOL _alternative)
 {
     R_ASSERT(base_fs, "Could not load geometry. File not found.");
@@ -305,6 +340,7 @@ void CRender::LoadBuffers(CStreamReader* base_fs, BOOL _alternative)
             //	Check if buffer is less then 2048 kb
             BYTE* pData = xr_alloc<BYTE>(iCount * 2);
             fs->r(pData, iCount * 2);
+            portal_mod_destruct_ib(_alternative != FALSE, i, (u16*)pData, iCount); // portal-mod E54
             R_CHK(dx10BufferUtils::CreateIndexBuffer(&_IB[i], pData, iCount * 2));
             DXUT_SetDebugName(_IB[i], "fsL_IB");
             xr_free(pData);
@@ -552,3 +588,6 @@ void CRender::Load3DFluid()
 
 #endif
 }
+
+// portal-mod E54b: whether a particle effect or group is in particles.xr (xrGame checks its config's names)
+bool portal_mod_ps_exists(LPCSTR name) { return name && *name && (RImplementation.PSLibrary.FindPED(name) || RImplementation.PSLibrary.FindPGD(name)); }
