@@ -12,6 +12,7 @@
 #pragma once
 
 class CEntity;
+class CEntityAlive;
 class CActor;
 struct lua_State;
 
@@ -20,6 +21,8 @@ namespace portal_mod_reboot
 bool intercept(CEntity* e, u16 who); // CEntity::KillEntity: true - the actor reboots instead (the kill is dropped)
 bool active(); // a reboot is under way
 bool script_alive(const CEntity* e); // the rebooting actor: alive to scripts, the save command and the main menu
+bool keeps_capsule(CEntityAlive* e); // CCharacterPhysicsSupport (in_UpdateCL, in_Hit): the actor rebooting (or about to) - no ragdoll
+bool spawns_down(CEntityAlive* e); // CCharacterPhysicsSupport::SpawnInitPhysics: loaded mid-reboot - his capsule, no ragdoll
 void update(CActor* a); // CActor::UpdateCL, every frame
 void script_register(lua_State* L); // CLevel::script_register: level.pm_reboot_*
 } // namespace portal_mod_reboot

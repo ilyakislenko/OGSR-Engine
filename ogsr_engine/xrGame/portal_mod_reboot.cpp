@@ -26,6 +26,9 @@
 #include "CharacterPhysicsSupport.h"
 #include "PHMovementControl.h"
 #include "xr_level_controller.h"
+#include "../Include/xrRender/RenderVisual.h"
+#include "../Include/xrRender/KinematicsAnimated.h"
+#include "../Include/xrRender/animation_blend.h"
 #include "../xr_3da/CameraBase.h"
 #include "../xr_3da/CameraManager.h"
 #include "../xr_3da/Effector.h"
@@ -75,6 +78,7 @@ struct State
     int charges = -1; // -1: from the config at first use
     float recharge_left = 0.f;
     bool active = false, started = false;
+    bool posed = false; // the body others see lies (lie_down)
     float t = 0.f, total = 12.f;
     u16 killer = u16(-1);
     u32 gen = 0;
@@ -516,6 +520,7 @@ void begin(CActor* a, u16 who)
 {
     S.active = true;
     S.started = false;
+    S.posed = false;
     S.t = 0.f;
     S.total = C.total;
     S.killer = who;
@@ -607,7 +612,9 @@ void start(CActor* a)
         rad2deg(S.phi_end), rad2deg(S.h_end), rad2deg(S.h0), S.e0, S.y_end - S.gy0);
 }
 
-// the capsule stays where he fell (with no input the character would keep its last push)
+// the capsule stays where he fell: with no input the character keeps its last push, and with no health it slides down
+// a slope (5.7 m in reboot_09's second reboot, no looter near) - put back over the spot each frame, its sideways speed
+// gone; it may still fall (the height is the physics')
 void hold_body(CActor* a, float dt)
 {
     CPHMovementControl* mc = a->character_physics_support() ? a->character_physics_support()->movement() : nullptr;
@@ -615,8 +622,39 @@ void hold_body(CActor* a, float dt)
         return;
     Fvector acc{0.f, 0.f, 0.f};
     mc->Calculate(acc, Device.vCameraDirection, 0.f, 0.f, dt, false);
+    Fvector p, v;
+    mc->GetPosition(p);
+    mc->GetCharacterVelocity(v);
+    if (_sqr(p.x - S.pos.x) + _sqr(p.z - S.pos.z) > 0.0004f || _abs(v.x) + _abs(v.z) > 0.02f)
+    {
+        p.x = S.pos.x;
+        p.z = S.pos.z;
+        mc->SetPosition(p);
+        mc->SetVelocity(0.f, _min(v.y, 0.f), 0.f);
+    }
     mc->GetPosition(a->Position());
     mc->bSleep = FALSE;
+}
+
+// the body others see (a looter, the drone, a scene's camera): the actor's own death motion, mp_stalker.omf's
+// norm_death_0 (stop at end), played once a few frames in - on the first frame with no health CActor::g_SetAnimation
+// plays norm_dead_stop_0, a standing pose; with the capsule kept (keeps_capsule) no ragdoll lays him down. A resumed
+// reboot lies at the motion's end at once. At the rise g_SetAnimation's living branch stands the model back up.
+void lie_down(CActor* a)
+{
+    S.posed = true;
+    IKinematicsAnimated* ka = a->Visual() ? smart_cast<IKinematicsAnimated*>(a->Visual()) : nullptr;
+    if (!ka)
+        return;
+    const MotionID m = ka->ID_Cycle_Safe("norm_death_0");
+    if (!m.valid())
+    {
+        Msg("! E74 reboot: no norm_death_0 among the actor's motions - his body stands while he reboots");
+        return;
+    }
+    CBlend* B = ka->PlayCycle(m);
+    if (B && S.t > 1.f)
+        B->timeCurrent = _max(0.f, B->timeTotal - 0.05f);
 }
 
 void finish(CActor* a)
@@ -689,6 +727,29 @@ bool active() { return S.active && S.actor && S.actor == Actor(); }
 
 bool script_alive(const CEntity* e) { return S.active && e && e == S.actor && S.actor == Actor(); }
 
+// The engine turns an entity with no health into a ragdoll and destroys its capsule (CCharacterPhysicsSupport::
+// in_UpdateCL every frame; a killing hit: in_Hit -> KillHit). Stood up after the reboot the actor had no capsule: stuck
+// where he fell, his position the capsule's stale one, the camera over it at a crouch's height - the ragdoll slid 1.6 m
+// down the slope while he lay, and a second reboot measured his eye from a position 0.6 m over the ground (takes
+// reboot_dual_01/02). The rebooting actor keeps his capsule (hold_body holds it) and lies in his own dead pose
+// (CActor::g_SetAnimation plays norm_dead_stop_0 while g_Alive() is false).
+bool keeps_capsule(CEntityAlive* e)
+{
+    CActor* a = smart_cast<CActor*>(e);
+    if (!a || a != Actor() || a->GetfHealth() > 0.f)
+        return false;
+    if (S.active && S.actor == a)
+        return true;
+    ensure();
+    if (spawned_down(a))
+        return true; // loaded mid-reboot: update() resumes it this frame
+    // no health and no KillEntity yet (CEntityAlive::shedule_Update calls it after this frame's UpdateCL): it will reboot
+    return S.on && S.charges > 0 && !a->Holder();
+}
+
+// an actor spawning with no health is a save made mid-reboot (no dead actor is ever saved otherwise)
+bool spawns_down(CEntityAlive* e) { return e && e->GetfHealth() <= 0.f && smart_cast<CActor*>(e); }
+
 void update(CActor* a)
 {
     if (!a || a != Actor())
@@ -727,6 +788,8 @@ void update(CActor* a)
     if (a->GetfHealth() > 0.f)
         a->SetfHealth(0.f); // dead to the world until he stands up
     hold_body(a, dt);
+    if (!S.posed && S.t >= 0.1f)
+        lie_down(a);
     a->cam_FirstEye()->yaw = -S.h_end; // the pose he stands up into (the mouse does nothing)
     a->cam_FirstEye()->pitch = 0.f;
     pulses_prune();

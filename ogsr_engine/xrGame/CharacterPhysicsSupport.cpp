@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "alife_space.h"
 #include "hit.h"
 #include "PHDestroyable.h"
@@ -232,7 +233,7 @@ void CCharacterPhysicsSupport::SpawnInitPhysics(CSE_Abstract* e)
 {
     // if(!m_physics_skeleton)CreateSkeleton(m_physics_skeleton);
 
-    if (m_EntityAlife.g_Alive())
+    if (m_EntityAlife.g_Alive() || portal_mod_reboot::spawns_down(&m_EntityAlife)) // portal-mod E74: loaded mid-reboot - his capsule
     {
 #ifdef DEBUG
         if (ph_dbg_draw_mask1.test(ph_m1_DbgTrackObject) && _stricmp(PH_DBG_ObjectTrack(), *m_EntityAlife.cName()) == 0)
@@ -432,6 +433,8 @@ void CCharacterPhysicsSupport::KillHit(SHit& H)
 
 void CCharacterPhysicsSupport::in_Hit(SHit& H, bool is_killing)
 {
+    if (portal_mod_reboot::keeps_capsule(&m_EntityAlife)) // portal-mod E74: a hit on the rebooting body neither kills nor ragdolls it
+        return;
     if (m_EntityAlife.use_simplified_visual())
         return;
     if (m_flags.test(fl_block_hit))
@@ -506,7 +509,8 @@ void CCharacterPhysicsSupport::in_UpdateCL()
         UpdateDeathAnims();
         UpdateFrictionAndJointResistanse();
     }
-    else if (!m_EntityAlife.g_Alive() && !m_EntityAlife.use_simplified_visual())
+    else if (!m_EntityAlife.g_Alive() && !m_EntityAlife.use_simplified_visual() &&
+             !portal_mod_reboot::keeps_capsule(&m_EntityAlife)) // portal-mod E74: no ragdoll while he reboots
     {
         ActivateShell(NULL);
         m_PhysicMovementControl->DestroyCharacter();
