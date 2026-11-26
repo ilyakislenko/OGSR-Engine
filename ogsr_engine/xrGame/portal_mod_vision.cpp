@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <random>
 #include <array>
+#include <cmath>
+#include <mutex>
 #include "portal_mod_vision.h"
 #include "../xr_3da/portal_mod_vision_shared.h"
 #include "portal_mod_replay.h"
@@ -20,6 +22,8 @@
 #include "Inventory.h"
 #include "inventory_item.h"
 #include "Weapon.h"
+#include "WeaponMagazinedWGrenade.h"
+#include "ai/stalker/ai_stalker.h"
 #include "character_info.h"
 #include "string_table.h"
 #include "memory_manager.h"
@@ -36,6 +40,7 @@
 #include "ai_space.h"
 #include "../xr_3da/XR_IOConsole.h"
 #include "../xrcdb/xr_collide_defs.h"
+#include "../xr_3da/GameMtlLib.h"
 #include "../Include/xrRender/Kinematics.h"
 
 using namespace luabind;
@@ -82,6 +87,14 @@ struct Cfg
 xr_map<xr_string, xr_string> g_text; // [pm_vision_text]
 xr_vector<std::pair<xr_string, xr_string>> g_species; // [pm_vision_species]: section substring -> name
 xr_map<xr_string, xr_string> g_faction; // [pm_vision_faction]: community -> name
+struct SpeciesThreat
+{
+    xr_string key;
+    float on{}, off{};
+    xr_string reason;
+};
+xr_vector<SpeciesThreat> g_species_threat; // [pm_vision_threat_species]: section substring -> threat (armour on, off), reason
+xr_map<xr_string, xr_string> g_ammo_name; // [pm_vision_ammo]: an ammo's or a grenade's section -> its name on the card
 const void* g_cfg_level{};
 
 LPCSTR T(LPCSTR id, LPCSTR def)
@@ -166,6 +179,24 @@ void load_cfg()
                 g_species.emplace_back(it.first.c_str(), unquote(it.second.c_str()));
         // the longest key first: "pseudodog" before "dog"
         std::sort(g_species.begin(), g_species.end(), [](const auto& a, const auto& b) { return a.first.size() > b.first.size(); });
+        g_ammo_name.clear();
+        if (ini.section_exist("pm_vision_ammo"))
+            for (const auto& it : ini.r_section("pm_vision_ammo").Data)
+                g_ammo_name[it.first.c_str()] = unquote(it.second.c_str());
+        g_species_threat.clear();
+        if (ini.section_exist("pm_vision_threat_species"))
+            for (const auto& it : ini.r_section("pm_vision_threat_species").Data)
+            {
+                SpeciesThreat s;
+                s.key = it.first.c_str();
+                char rid[64]{};
+                if (sscanf(it.second.c_str(), "%f,%f,%63s", &s.on, &s.off, rid) >= 2)
+                {
+                    s.reason = rid;
+                    g_species_threat.push_back(s);
+                }
+            }
+        std::sort(g_species_threat.begin(), g_species_threat.end(), [](const auto& a, const auto& b) { return a.key.size() > b.key.size(); });
     }
     else
         Msg("! E76 vision: config\\portal_mod\\pm_vision.ltx not found");
@@ -246,6 +277,10 @@ struct Target
     float head[2]{};
     bool head_ok{}, on_screen{};
     xr_string name, faction, rank, weapon;
+    // the threat's makings (refresh_data, 2 Hz): what he can do to this machine, and why (the card's reason line)
+    float base{}, range{100.f};
+    bool expl{}, down{};
+    xr_string reason, why;
     u32 frame{}; // the frame it was last gathered
 };
 xr_map<u16, Target> g_targets;
@@ -458,6 +493,19 @@ bool project(const Fvector& p, float& sx, float& sy)
     return true;
 }
 
+// in sight as the game's own eyes see it (visual_memory_manager): a see-through material lets the look through by its
+// transparency - a bush's leaves, an invisible wall's "fake" (Cordon has some over its fields: a man standing in the open
+// behind one was not read out) - an opaque one stops it
+BOOL see_through(collide::rq_result& r, LPVOID data)
+{
+    float& vis = *static_cast<float*>(data);
+    if (r.O)
+        return TRUE;
+    const CDB::TRI* T = Level().ObjectSpace.GetStaticTris() + r.element;
+    vis *= GMLib.GetMaterialByIdx(T->material)->fVisTransparencyFactor;
+    return vis > 0.25f;
+}
+
 bool ray_clear(const Fvector& from, const Fvector& to)
 {
     Fvector d;
@@ -466,10 +514,11 @@ bool ray_clear(const Fvector& from, const Fvector& to)
     if (dist < 0.4f)
         return true;
     d.div(dist);
-    collide::rq_result R;
-    if (!Level().ObjectSpace.RayPick(from, d, dist - 0.2f, collide::rqtStatic, R, nullptr))
-        return true;
-    return R.range >= dist - 0.35f;
+    static collide::rq_results hits; // (the render's thread only)
+    float vis = 1.f;
+    const collide::ray_defs rd(from, d, dist - 0.35f, CDB::OPT_CULL, collide::rqtStatic);
+    Level().ObjectSpace.RayQuery(hits, rd, see_through, &vis, nullptr, nullptr);
+    return vis > 0.25f;
 }
 
 //------------------------------------------------------------------------------------------------------------------
@@ -494,6 +543,296 @@ LPCSTR species_name(CObject* O)
         if (strstr(sect, s.first.c_str()))
             return s.second.c_str();
     return T("mutant", "MUTANT");
+}
+
+//------------------------------------------------------------------------------------------------------------------
+// the threat, the T-800's way: what can hurt this machine. The armour's own rules come from scripts\pm_armor.script
+// (its My Mods switch, FULL_WEAPONS, STRONG, K_BULLET, K_SUIT, K_MELEE - the same lists): pm_armor pushes them with
+// level.vision_armor_rules() from its update when they change (never read from here: this runs in the render, while
+// OGSR's A-Life updates on a worker thread run Lua - a call from here raced them, "pure virtual function called").
+// Bullets scratch the paint and wear the suit, Gauss slugs, rockets, grenades and the pseudogiant's blows go through in
+// full, blades and claws at K_MELEE, psi at nothing. With the armour switched off: plain lethality.
+struct ArmorRules
+{
+    bool on{true}, read{};
+    xr_vector<xr_string> full{"gauss", "grenade", "rpg", "rocket", "explosive", "ammo_vog", "ammo_m209", "ammo_og", "rg6", "rg-6"};
+    xr_vector<xr_string> strong{"gigant"};
+    float k_bullet{0.00018f}, k_suit{0.006f}, k_melee{0.15f};
+} g_armor;
+std::mutex g_armor_mx;
+xr_string g_armor_pending;
+bool g_armor_new{};
+
+struct WeaponStat
+{
+    float wear{}, range{100.f};
+    xr_string ammo;
+};
+xr_map<xr_string, WeaponStat> g_wstat; // a weapon's section -> its suit wear (a bullet weapon's grade), range, first ammo
+
+bool listed(LPCSTR s, const xr_vector<xr_string>& list)
+{
+    if (!s)
+        return false;
+    for (const auto& k : list)
+        if (k.size() && strstr(s, k.c_str()))
+            return true;
+    return false;
+}
+
+xr_vector<xr_string> split_list(LPCSTR s)
+{
+    xr_vector<xr_string> out;
+    xr_string cur;
+    for (const char* p = s; p && *p; ++p)
+    {
+        if (*p == ',')
+        {
+            if (cur.size())
+                out.push_back(cur);
+            cur.clear();
+        }
+        else if (*p != ' ' && *p != '\t')
+            cur += *p;
+    }
+    if (cur.size())
+        out.push_back(cur);
+    return out;
+}
+
+float first_float(LPCSTR s, float def)
+{
+    float v;
+    return s && sscanf(s, "%f", &v) == 1 ? v : def;
+}
+
+float avg_floats(LPCSTR s, float def)
+{
+    float sum = 0.f;
+    int n = 0;
+    for (const auto& it : split_list(s))
+    {
+        float v;
+        if (sscanf(it.c_str(), "%f", &v) == 1)
+            sum += v, ++n;
+    }
+    return n ? sum / float(n) : def;
+}
+
+// pm_armor.rules()'s line: "on=1;full=a,b;strong=c;k_bullet=x;k_suit=y;k_melee=z"
+void armor_rules(LPCSTR r)
+{
+    if (!r)
+        return;
+    {
+        const xr_string s = r;
+        size_t a = 0;
+        while (a < s.size())
+        {
+            size_t b = s.find(';', a);
+            if (b == xr_string::npos)
+                b = s.size();
+            const xr_string kv = s.substr(a, b - a);
+            const size_t e = kv.find('=');
+            if (e != xr_string::npos)
+            {
+                const xr_string k = kv.substr(0, e), v = kv.substr(e + 1);
+                if (k == "on")
+                    g_armor.on = v != "0";
+                else if (k == "full")
+                    g_armor.full = split_list(v.c_str());
+                else if (k == "strong")
+                    g_armor.strong = split_list(v.c_str());
+                else if (k == "k_bullet")
+                    g_armor.k_bullet = first_float(v.c_str(), g_armor.k_bullet);
+                else if (k == "k_suit")
+                    g_armor.k_suit = first_float(v.c_str(), g_armor.k_suit);
+                else if (k == "k_melee")
+                    g_armor.k_melee = first_float(v.c_str(), g_armor.k_melee);
+            }
+            a = b + 1;
+        }
+        Msg("* E76 vision: the armour's rules from pm_armor: on %d, %u full, %u strong, melee x%.2f", g_armor.on ? 1 : 0, u32(g_armor.full.size()),
+            u32(g_armor.strong.size()), g_armor.k_melee);
+        g_armor.read = true;
+        g_wstat.clear();
+        for (auto& [id, g] : g_targets)
+            g.t_data = -100.f; // read out again by the new rules
+    }
+}
+
+// an ammo's or a grenade's name on the card: the vision's own table, else the game's inv_name_short
+xr_string ammo_name(LPCSTR sec)
+{
+    auto it = g_ammo_name.find(sec ? sec : "");
+    if (it != g_ammo_name.end())
+        return it->second;
+    if (sec && pSettings->section_exist(sec) && pSettings->line_exist(sec, "inv_name_short"))
+        return upper(CStringTable().translate(pSettings->r_string(sec, "inv_name_short")).c_str());
+    return upper(sec ? sec : "?");
+}
+
+// a bullet weapon's grade from its own ltx and its first ammo's: the suit's wear over a second of fire - the hit power x
+// the ammo's k_hit x its pellets (square root: a spread) x its k_pierce x (rounds a second over a magazine and a 2.5 s
+// reload, plus one: a single heavy round counts too). PM 1.0, sawn-off 1.4, AK 2.5, SVD 2.9, M134 63; graded
+// 0.03 + 0.10 log2(1 + wear) with the armour on, at most 0.44: a PM negligible, an AK or an SVD low, the M134 medium
+const WeaponStat& weapon_stat(LPCSTR sec)
+{
+    auto it = g_wstat.find(sec);
+    if (it != g_wstat.end())
+        return it->second;
+    WeaponStat w;
+    if (pSettings->section_exist(sec))
+    {
+        auto str = [sec](LPCSTR k) -> LPCSTR { return pSettings->line_exist(sec, k) ? pSettings->r_string(sec, k) : nullptr; };
+        const float hp = avg_floats(str("hit_power"), 0.3f);
+        const float rps = std::max(first_float(str("rpm"), 60.f), 1.f) / 60.f;
+        const float mag = std::max(first_float(str("ammo_mag_size"), 1.f), 1.f);
+        w.range = first_float(str("fire_distance"), 100.f);
+        const auto ammo = split_list(str("ammo_class"));
+        float kh = 1.f, kp = 1.f, buck = 1.f;
+        if (ammo.size() && pSettings->section_exist(ammo[0].c_str()))
+        {
+            const LPCSTR as = ammo[0].c_str();
+            w.ammo = ammo[0];
+            if (pSettings->line_exist(as, "k_hit"))
+                kh = first_float(pSettings->r_string(as, "k_hit"), 1.f);
+            if (pSettings->line_exist(as, "k_pierce"))
+                kp = first_float(pSettings->r_string(as, "k_pierce"), 1.f);
+            if (pSettings->line_exist(as, "buck_shot"))
+                buck = first_float(pSettings->r_string(as, "buck_shot"), 1.f);
+        }
+        const float sustained = mag / (mag / rps + 2.5f);
+        w.wear = hp * kh * _sqrt(std::max(1.f, buck)) * kp * (sustained + 1.f);
+    }
+    return g_wstat[sec] = w;
+}
+
+// the standing part of a target's threat (what he carries, what he is) and its reason line; aim, range, being down and
+// the rest are added each frame in update_targets
+void assess(Target& g, CObject* O, CInventoryOwner* io)
+{
+    g.base = 0.f;
+    g.expl = false;
+    g.down = false;
+    g.range = 100.f;
+    g.reason.clear();
+    const bool armour = g_armor.on;
+    if (!io)
+    {
+        // a mutant by its species: the pseudogiant's blows go through in full (the armour's STRONG), the rest at K_MELEE
+        LPCSTR sec = O->cNameSect().c_str();
+        if (listed(sec, g_armor.strong))
+        {
+            g.base = armour ? 0.74f : 0.86f;
+            g.reason = armour ? T("r_full_blow", "BLOW: FULL DAMAGE TO HULL") : T("r_armor_off", "ARMOUR OFF");
+            return;
+        }
+        const SpeciesThreat* sp = nullptr;
+        for (const auto& s : g_species_threat)
+            if (strstr(sec, s.key.c_str()))
+            {
+                sp = &s;
+                break;
+            }
+        g.base = sp ? (armour ? sp->on : sp->off) : (armour ? 0.08f : 0.30f);
+        const xr_string rid = sp && sp->reason.size() ? sp->reason : xr_string("r_melee");
+        if (!armour)
+            g.reason = T("r_armor_off", "ARMOUR OFF");
+        else if (rid == "r_melee")
+            g.reason = fmt("%s x%.2f", T("r_melee", "MELEE: DAMAGE"), g_armor.k_melee);
+        else
+            g.reason = T(rid.c_str(), rid.c_str());
+        return;
+    }
+    if (CAI_Stalker* st = smart_cast<CAI_Stalker*>(O))
+        g.down = st->wounded(); // down or given up: SoC's own wounded scheme (xr_wounded) carries both, E71's too
+    // what he carries: an explosive weapon (the armour's list: the RPG-7, the RG-6, the Gauss), a rifle's launcher with
+    // its grenades, hand grenades; and the bullet weapon in his hands, else his best one
+    float hand_wear = -1.f, best_wear = -1.f, hand_range = 100.f, best_range = 100.f, erange = 0.f;
+    xr_string hand_ammo, best_ammo, ename, gname;
+    PIItem active = io->inventory().ActiveItem();
+    for (PIItem it : io->inventory().m_all)
+    {
+        if (!it)
+            continue;
+        LPCSTR sec = it->object().cNameSect().c_str();
+        CWeapon* w = smart_cast<CWeapon*>(it);
+        if (!w)
+        {
+            if (strstr(sec, "grenade") == sec && listed(sec, g_armor.full) && gname.empty())
+                gname = ammo_name(sec);
+            continue;
+        }
+        if (strstr(sec, "knife") || strstr(sec, "binoc"))
+            continue; // a blade is a blow (x K_MELEE, below), binoculars nothing
+        const WeaponStat& ws = weapon_stat(sec);
+        if (listed(sec, g_armor.full))
+        {
+            if (ws.range > erange)
+                erange = ws.range, ename = ammo_name(ws.ammo.size() ? ws.ammo.c_str() : sec);
+            continue;
+        }
+        if (w->IsGrenadeLauncherAttached())
+            if (CWeaponMagazinedWGrenade* gl = smart_cast<CWeaponMagazinedWGrenade*>(w))
+                if (!gl->m_ammoTypes2.empty())
+                {
+                    bool have = gl->GetAmmoElapsed2() > 0;
+                    for (PIItem a2 : io->inventory().m_all)
+                        if (a2 && std::find(gl->m_ammoTypes2.begin(), gl->m_ammoTypes2.end(), a2->object().cNameSect()) != gl->m_ammoTypes2.end())
+                            have = true;
+                    const float r = std::min(ws.range, 250.f);
+                    if (have && r > erange)
+                        erange = r, ename = ammo_name(gl->m_ammoTypes2[0].c_str());
+                }
+        const xr_string am = ws.ammo.size() ? ws.ammo : xr_string(sec);
+        if (it == active)
+            hand_wear = ws.wear, hand_range = ws.range, hand_ammo = am;
+        if (ws.wear > best_wear)
+            best_wear = ws.wear, best_range = ws.range, best_ammo = am;
+    }
+    const float wear = hand_wear >= 0.f ? hand_wear : best_wear;
+    if (ename.size())
+    {
+        g.base = armour ? 0.72f : 0.80f;
+        g.expl = true;
+        g.range = erange;
+        g.reason = fmt("%s: %s", ename.c_str(), armour ? T("r_hull", "HULL AT RISK") : T("r_armor_off", "ARMOUR OFF"));
+    }
+    else if (wear >= 0.f)
+    {
+        const float l = std::log(1.f + wear) / std::log(2.f);
+        g.base = armour ? clampr(0.03f + 0.10f * l, 0.03f, 0.44f) : clampr(0.18f + 0.20f * l, 0.15f, 0.80f);
+        g.range = hand_wear >= 0.f ? hand_range : best_range;
+        const xr_string& am = hand_wear >= 0.f ? hand_ammo : best_ammo;
+        g.reason = fmt("%s: %s", ammo_name(am.c_str()).c_str(), armour ? T("r_no_pierce", "DOES NOT PIERCE ARMOUR") : T("r_armor_off", "ARMOUR OFF"));
+    }
+    else
+    {
+        g.base = armour ? 0.04f : 0.10f;
+        g.range = 3.f;
+        g.reason = armour ? fmt("%s x%.2f", T("r_unarmed", "BLOWS: DAMAGE"), g_armor.k_melee) : xr_string(T("r_armor_off", "ARMOUR OFF"));
+    }
+    if (gname.size())
+    {
+        g.base += armour ? 0.14f : 0.10f; // a step up
+        if (ename.empty())
+            g.reason = fmt("%s: %s", gname.c_str(), armour ? T("r_hull", "HULL AT RISK") : T("r_armor_off", "ARMOUR OFF"));
+    }
+    // rank and faction only nudge it
+    const LPCSTR rk = InventoryUtilities::GetRankAsText(io->Rank());
+    if (rk && strstr(rk, "novice"))
+        g.base -= 0.03f;
+    else if (rk && strstr(rk, "veteran"))
+        g.base += 0.02f;
+    else if (rk && strstr(rk, "master"))
+        g.base += 0.04f;
+    const shared_str cid = io->CharacterInfo().Community().id();
+    if (cid.size() && (strstr(cid.c_str(), "monolith") || strstr(cid.c_str(), "military")))
+        g.base += 0.03f;
+    else if (cid.size() && strstr(cid.c_str(), "bandit"))
+        g.base -= 0.02f;
+    g.base = std::max(g.base, 0.03f);
 }
 
 void refresh_data(Target& g, CObject* O)
@@ -536,6 +875,7 @@ void refresh_data(Target& g, CObject* O)
     if (CCustomMonster* cm = smart_cast<CCustomMonster*>(O))
         g.aiming = Actor() && cm->memory().enemy().selected() == Actor() && !pm_replay::lua_active(); // a replay's man is a
                                                                                                     // puppet: not now's aim
+    assess(g, O, io);
 }
 
 void gather(xr_vector<Cand>& out)
@@ -708,17 +1048,32 @@ void update_targets(float dt)
             refresh_data(g, c.O);
         else if (g.name.empty())
             g.name = T("unknown", "OBJECT");
-        // threat
+        // threat: what he carries or is (assess), then: no enemy - none; down or given up and not aiming - next to none;
+        // an explosive weapon trained on the T-800 within its range - critical; a bullet weapon trained on it - a nudge;
+        // nearer within his weapon's range - a nudge; the invisible bloodsucker - a step
         float th = 0.f;
-        if (g.alive)
+        g.why = g.reason;
+        if (g.alive && c.O)
         {
-            th += g.hostile ? 0.45f : 0.f;
-            th += g.aiming ? 0.30f : 0.f;
-            th += (!g.monster && g.weapon.size() && g.weapon != T("no_weapon", "NONE")) ? 0.10f : (g.monster && g.hostile ? 0.08f : 0.f);
-            th += 0.15f * clampr(1.f - g.dist / 80.f, 0.f, 1.f);
-            if (g.ghost)
-                th += 0.2f;
+            if (!g.hostile)
+                g.why = T("r_not_hostile", "NOT HOSTILE");
+            else if (g.down && !g.aiming)
+                th = 0.02f, g.why = T("r_down", "OUT OF ACTION");
+            else
+            {
+                th = g.base;
+                if (g.expl && g.aiming && g.dist <= g.range)
+                    th = std::max(th, 0.90f);
+                else if (!g.monster && g.aiming)
+                    th += 0.05f;
+                if (!g.monster) // nearer within his weapon's reach (a rifle's 1 km counts as 100 m: close is close)
+                    th += 0.03f * clampr(1.f - g.dist / clampr(g.range, 1.f, 100.f), 0.f, 1.f);
+                if (g.ghost)
+                    th += 0.14f;
+            }
         }
+        else if (g.alive)
+            th = g.hostile ? 0.2f : 0.f; // a replay's puppet: no inventory to read
         g.threat = clampr(th, 0.f, 1.f);
         if (fresh)
         {
@@ -771,7 +1126,9 @@ void update_lock()
         float dd = std::min(_sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)), _sqrt(_sqr((g.box[0] + g.box[2]) * 0.5f - cx) + _sqr((g.box[1] + g.box[3]) * 0.5f - cy)));
         if (inside)
             dd *= 0.25f;
-        if (dd < rad && dd < bd)
+        const bool in_rad = dd < rad;
+        dd *= 1.15f - 0.5f * g.threat; // of two near the middle, the bigger threat
+        if (in_rad && dd < bd)
             bd = dd, best = id;
     }
     if (best != g_lock_try)
@@ -801,8 +1158,16 @@ void update_lock()
 
 //------------------------------------------------------------------------------------------------------------------
 // the HUD
-LPCSTR threat_word(float th) { return th >= 0.72f ? T("threat_high", "HIGH") : th >= 0.45f ? T("threat_mid", "MEDIUM") : th > 0.15f ? T("threat_low", "LOW") : T("threat_none", "NONE"); }
-u32 threat_col(float th) { return th >= 0.72f ? C.col_hot : th >= 0.45f ? C.col_warm : C.col; }
+LPCSTR threat_word(float th)
+{
+    return th >= 0.86f ? T("threat_crit", "CRITICAL") :
+        th >= 0.62f    ? T("threat_high", "HIGH") :
+        th >= 0.38f    ? T("threat_mid", "MEDIUM") :
+        th >= 0.16f    ? T("threat_low", "LOW") :
+        th >= 0.03f    ? T("threat_min", "NEGLIGIBLE") :
+                         T("threat_none", "NONE");
+}
+u32 threat_col(float th) { return th >= 0.62f ? C.col_hot : th >= 0.38f ? C.col_warm : C.col; }
 
 // where the priority target's card goes: right of its brackets, left, above or below them - the place that covers the
 // fewest other targets' brackets and tags and stays on the screen; it keeps its place until another is clearly better
@@ -918,9 +1283,12 @@ void draw_target(const Target& g, float a)
         text(tx, y0 + 18.f * S, fmt("%.0f %s", g.dist, T("m", "M")).c_str(), F_SM, rgba(C.col, a * 0.5f));
         return;
     }
-    // the priority target's card, typed out: number and threat, name, faction and rank, weapon, health and distance
+    // the priority target's card, typed out: number and threat, the machine's reason for it (from the game's data), name,
+    // faction and rank, weapon, health and distance
     xr_vector<xr_string> lines;
     lines.push_back(fmt("%s-%02d  %s: %s", P, g.num, T("threat", "THREAT"), threat_word(g.threat)));
+    if (g.why.size())
+        lines.push_back(g.why);
     lines.push_back(g.name);
     if (g.rank.size())
         lines.push_back(fmt("%s \xB7 %s", g.faction.c_str(), g.rank.c_str()));
@@ -1300,6 +1668,16 @@ void before_render()
         return;
     }
     sync_game_hud();
+    {
+        xr_string r;
+        {
+            std::lock_guard<std::mutex> lk(g_armor_mx);
+            if (g_armor_new)
+                r = g_armor_pending, g_armor_new = false;
+        }
+        if (r.size())
+            armor_rules(r.c_str());
+    }
     // the fade: up in 0.35 s, down in 0.3 s
     g_fade = g_active ? std::min(1.f, g_fade + rdt / 0.35f) : std::max(0.f, g_fade - rdt / 0.3f);
     if (!g_switch || (!g_active && g_fade <= 0.f) || !g_pGameLevel)
@@ -1468,6 +1846,13 @@ void api_on(bool on) { set_active(on); }
 void api_toggle() { set_active(!g_active); }
 bool api_active() { return g_active; }
 void api_export(int mode) { g_export = u32(clampr(mode, 0, 2)); }
+// (from Lua's thread: kept for the render's thread, which reads the rules, to parse - no vector changed under its feet)
+void api_armor_rules(LPCSTR r)
+{
+    std::lock_guard<std::mutex> lk(g_armor_mx);
+    g_armor_pending = r ? r : "";
+    g_armor_new = true;
+}
 
 luabind::object api_targets()
 {
@@ -1488,6 +1873,7 @@ luabind::object api_targets()
         e["health"] = g.health;
         e["dist"] = g.dist;
         e["threat"] = g.threat;
+        e["reason"] = g.why.c_str();
         e["hostile"] = g.hostile;
         e["aiming"] = g.aiming;
         e["visible"] = g.visible;
@@ -1514,10 +1900,10 @@ LPCSTR api_targets_text()
         if (g.t_dead >= 0.f)
             continue;
         out += fmt("id=%u\tnum=%d\tname=%s\tfaction=%s\trank=%s\tweapon=%s\thealth=%.3f\tdist=%.2f\tthreat=%.3f\thostile=%d\taiming=%d\tvisible=%d\t"
-                   "monster=%d\tghost=%d\tlocked=%d\tprimary=%d\tx=%.4f\ty=%.4f\n",
+                   "monster=%d\tghost=%d\tlocked=%d\tprimary=%d\tx=%.4f\ty=%.4f\treason=%s\tdown=%d\n",
                    u32(g.id), g.num, g.name.c_str(), g.faction.c_str(), g.rank.c_str(), g.weapon.c_str(), g.health, g.dist, g.threat, g.hostile ? 1 : 0,
                    g.aiming ? 1 : 0, g.visible ? 1 : 0, g.monster ? 1 : 0, g.ghost ? 1 : 0, (g_locked && g_lock == id) ? 1 : 0, g_primary == id ? 1 : 0,
-                   (g.box[0] + g.box[2]) * 0.5f / std::max(1.f, SW), (g.box[1] + g.box[3]) * 0.5f / std::max(1.f, SH));
+                   (g.box[0] + g.box[2]) * 0.5f / std::max(1.f, SW), (g.box[1] + g.box[3]) * 0.5f / std::max(1.f, SH), g.why.c_str(), g.down ? 1 : 0);
     }
     return out.c_str();
 }
@@ -1572,5 +1958,6 @@ void pm_vision_script_register(lua_State* L)
     using namespace pm_vision;
     module(L, "level")[def("vision_switch", &api_switch), def("vision_switched", &api_switched), def("vision_on", &api_on), def("vision_toggle", &api_toggle),
                        def("vision_active", &api_active), def("vision_targets", &api_targets), def("vision_targets_text", &api_targets_text), def("vision_info", &api_info), def("vision_tune", &api_tune),
-                       def("vision_export", &api_export), def("vision_reload", &api_reload)];
+                       def("vision_export", &api_export), def("vision_reload", &api_reload),
+                       def("vision_armor_rules", &api_armor_rules)];
 }
