@@ -833,6 +833,22 @@ void CWeaponMagazined::OnShot()
 
     // Animation
     PlayAnimShoot();
+    {
+        // portal-mod E77: E27's shot hands the HUD model to the other hand (PlayAnimShoot); the fire point read above for
+        // the sound is that frame's cache - drop it, so the shell, the flame and the smoke come from the hand that fired
+        extern bool g_hud_dual, g_hud_dual_alt;
+        if (g_hud_dual && g_hud_dual_alt && ParentIsActor())
+        {
+            dwFP_Frame = 0xffffffff;
+            if (IsHudModeNow())
+            {
+                Fvector d;
+                d.sub(get_LastFP(), Device.vCameraPosition);
+                const float x = d.dotproduct(Device.vCameraRight);
+                Msg("portal-mod E77: the shot's flame, smoke and shell from the %s hand (%+.2f m)", x < 0.f ? "left" : "right", x);
+            }
+        }
+    }
 
     // Shell Drop
     Fvector vel;

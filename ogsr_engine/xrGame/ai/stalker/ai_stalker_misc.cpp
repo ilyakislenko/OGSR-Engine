@@ -123,7 +123,7 @@ void CAI_Stalker::react_on_grenades()
     {
         //		Msg						("%6d : Stalker %s : grenade reaction",Device.dwTimeGlobal,*m_object->cName());
         CEntityAlive* initiator = smart_cast<CEntityAlive*>(Level().Objects.net_Find(reaction.m_grenade->CurrentParentID()));
-        if (is_relation_enemy(initiator))
+        if (initiator && is_relation_enemy(initiator)) // portal-mod E77: a spawned grenade has no thrower
             sound().play(StalkerSpace::eStalkerSoundGrenadeAlarm);
         else if (missile->Position().distance_to(Position()) < FRIENDLY_GRENADE_ALARM_DIST)
             sound().play(StalkerSpace::eStalkerSoundFriendlyGrenadeAlarm);

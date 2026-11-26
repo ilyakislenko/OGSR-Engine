@@ -495,6 +495,8 @@ ALife::ERelationType CEntityAlive::tfGetRelationType(const CEntityAlive* tpEntit
 
 bool CEntityAlive::is_relation_enemy(const CEntityAlive* tpEntityAlive) const
 {
+    if (!tpEntityAlive) // portal-mod E77: nobody is no enemy
+        return false;
     return ((tfGetRelationType(tpEntityAlive) == ALife::eRelationTypeEnemy) || (tfGetRelationType(tpEntityAlive) == ALife::eRelationTypeWorstEnemy));
 }
 

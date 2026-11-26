@@ -627,6 +627,8 @@ void CController::TranslateActionToPathParams()
 
 bool CController::is_relation_enemy(const CEntityAlive* tpEntityAlive) const
 {
+    if (!tpEntityAlive) // portal-mod E77
+        return false;
     //	MONSTER_COMMUNITY_ID
     if (xr_strcmp(*(tpEntityAlive->cNameSect()), "stalker_zombied") == 0)
         return false;
