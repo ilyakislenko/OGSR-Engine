@@ -1953,6 +1953,9 @@ void CLevel::script_register(lua_State* L)
             // portal-mod E53c: the bullet camera
             def("replay_bullet_cam", &pm_replay::lua_bullet_cam), def("replay_bullet_cam_at", &pm_replay::lua_bullet_cam_at),
             def("replay_bullet_cam_state", &pm_replay::lua_bullet_cam_state),
+            // portal-mod E53d: the take's own camera and the first-person hands
+            def("replay_take_cam", &pm_replay::lua_take_cam), def("replay_hands", &pm_replay::lua_hands),
+            def("replay_hands_default", &pm_replay::lua_hands_default), def("replay_hands_state", &pm_replay::lua_hands_state),
             def("actor_arm_aim", &actor_arm_aim), // portal-mod E34
             def("actor_tp_dual", &actor_tp_dual), // portal-mod E36
             def("portal_pose_object", &portal_pose_object), // portal-mod E41

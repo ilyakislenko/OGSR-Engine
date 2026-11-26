@@ -245,8 +245,15 @@ void CHUDManager::Render_MAIN(u32 context_id)
     if (nullptr == pUI)
         return;
 
-    if (!need_render_hud())
+    if (pm_replay::hud_render(context_id)) // portal-mod E53d: a replay draws its own hands (or none), not the game's HUD
         return;
+    pm_replay::hud_capture_begin(); // portal-mod E53d: the recorder takes the camera and what the HUD draws now
+
+    if (!need_render_hud())
+    {
+        pm_replay::hud_capture_end(); // portal-mod E53d
+        return;
+    }
 
     ZoneScoped;
 
@@ -260,6 +267,7 @@ void CHUDManager::Render_MAIN(u32 context_id)
         O->OnHUDDraw(this, context_id, root);
         root->renderable_HUD(false);
     }
+    pm_replay::hud_capture_end(); // portal-mod E53d
 
     // Render_Actor_FirstPersonBody(context_id);
 }

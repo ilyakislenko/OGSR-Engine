@@ -8,6 +8,15 @@
 #include "level.h"
 #include "weapon.h"
 #include "portal_mod_dualaim.h" // portal-mod E70: dual wield split targeting
+#include "portal_mod_replay.h" // portal-mod E53d
+
+// portal-mod E53d: every model the HUD draws also goes to the replay's recorder (the first-person view of a take); the
+// pose is read after add_Visual, which calculates the bones
+static void pm_hud_add(u32 context_id, IRenderable* root, IRenderVisual* v, Fmatrix& m)
+{
+    ::Render->add_Visual(context_id, root, v, m);
+    pm_replay::hud_capture_draw(v, m);
+}
 
 player_hud* g_player_hud{};
 
@@ -482,13 +491,13 @@ void attachable_hud_item::render(u32 context_id, IRenderable* root)
         e27_drawn = int(sw);
         Msg("portal-mod E27: drawn %s, frame %u", sw ? "swapped" : "as is", Device.dwFrame);
     }
-    ::Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), sw ? m_item_transform_dual : m_item_transform);
+    pm_hud_add(context_id, root, m_model->dcast_RenderVisual(), sw ? m_item_transform_dual : m_item_transform);
     if (dual)
     {
         IKinematics* other = m_dual_model ? m_dual_model : m_model;
         extern bool g_r_dsgraph_dup_ok; // portal-mod E26b: the render graph takes a visual once a pass otherwise
         g_r_dsgraph_dup_ok = true;
-        ::Render->add_Visual(context_id, root, other->dcast_RenderVisual(), sw ? m_item_transform : m_item_transform_dual);
+        pm_hud_add(context_id, root, other->dcast_RenderVisual(), sw ? m_item_transform : m_item_transform_dual);
         g_r_dsgraph_dup_ok = false;
     }
     debug_draw_firedeps();
@@ -1076,9 +1085,9 @@ void player_hud::render_hud(u32 context_id, IRenderable* root)
 
     if (b_has_hands || script_anim_part != u8(-1))
     {
-        ::Render->add_Visual(context_id, root, m_model->dcast_RenderVisual(), m_transform);
+        pm_hud_add(context_id, root, m_model->dcast_RenderVisual(), m_transform);
 
-        ::Render->add_Visual(context_id, root, m_model_2->dcast_RenderVisual(), m_transform_2);
+        pm_hud_add(context_id, root, m_model_2->dcast_RenderVisual(), m_transform_2);
     }
 
     if (!script_override_item) // можно скрывать предметы в руках во время скриптовой анимаии, но выглядит кривовато
@@ -1094,7 +1103,7 @@ void player_hud::render_hud(u32 context_id, IRenderable* root)
     {
         if (script_anim_item_model)
         {
-            ::Render->add_Visual(context_id, root, script_anim_item_model->dcast_RenderVisual(), m_item_pos);
+            pm_hud_add(context_id, root, script_anim_item_model->dcast_RenderVisual(), m_item_pos);
         }
     }
 }

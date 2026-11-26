@@ -9,6 +9,7 @@
 struct SBullet;
 class IKinematics; // portal-mod E76
 class IRenderable; // portal-mod E76
+class IRenderVisual; // portal-mod E53d
 
 namespace pm_replay
 {
@@ -99,4 +100,18 @@ bool lua_bullet_cam(float t);
 // ... of those that ended within 0.4 s of t, the one whose way passed nearest pos (within 4 m; else as above)
 bool lua_bullet_cam_at(float t, Fvector pos);
 int lua_bullet_cam_state();
+// portal-mod E53d: the first-person view of a take. CHUDManager::Render_MAIN: the recorder takes the camera as drawn and,
+// between begin and end, every model player_hud draws (player_hud.cpp: pm_hud_add); in a replay hud_render draws the
+// replay's hands instead of the game's HUD (true: a replay is open)
+void hud_capture_begin();
+void hud_capture_draw(IRenderVisual* v, const Fmatrix& m);
+void hud_capture_end();
+bool hud_render(u32 context_id);
+// level.replay_take_cam(on): the take's own camera, as the game drew it (false: the take has none); replay_hands(on) /
+// replay_hands_default(): the hands on this camera (by default: on on the take's camera only, off on every other);
+// replay_hands_state(): the models drawn now (0: no hands)
+bool lua_take_cam(bool on);
+void lua_hands(bool on);
+void lua_hands_default();
+int lua_hands_state();
 } // namespace pm_replay

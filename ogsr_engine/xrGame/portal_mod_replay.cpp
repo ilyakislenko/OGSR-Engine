@@ -55,6 +55,8 @@
 #include "../Include/xrRender/RenderVisual.h"
 
 CRandom* pm_random_use(CRandom* r); // E53b: xrCore/_math.cpp - the particles' random sequence in place of the thread's
+extern bool g_r_dsgraph_dup_ok; // portal-mod E53d: E26b's (r__dsgraph_build.cpp) - the hands' mirrored gun drawn twice
+extern ENGINE_API float psHUD_FOV; // portal-mod E53d: the HUD's FOV as the take drew it
 
 // the creature's eye, as CCustomMonster::eye_pp_s0 computes it for its vision
 void CCustomMonster::PmEye(Fvector& pos, Fvector& dir)
@@ -99,8 +101,10 @@ constexpr u32 PS_STOPPED = 1, PS_XFORM = 2;
 constexpr u32 L_ON = 1, L_SHADOW = 2, L_VOLUMETRIC = 4;
 constexpr u8 K_OTHER = 0, K_CREATURE = 1, K_ACTOR = 2;
 constexpr float TELEPORT = 8.f; // no interpolation over a jump this long (a teleport, a portal)
-constexpr u32 TAKE_VERSION = 3; // 2: E53b - exact particles (seeds, the frames' ms), bullets' paths, shader time, wind;
-                                // 3: E53c - every bullet's ammo (version 2 takes open too, their bullets the default)
+constexpr u32 TAKE_VERSION = 4; // 2: E53b - exact particles (seeds, the frames' ms), bullets' paths, shader time, wind;
+                                // 3: E53c - every bullet's ammo (version 2 takes open too, their bullets the default);
+                                // 4: portal-mod E53d - the channels after the fixed part ("HND1": the first-person
+                                // view); versions 2 and 3 open too, with no hands
 constexpr u32 PS_Q = CParticlesObject::PM_PS_QUANTUM; // a live particle system's step, ms (E53b)
 
 double now_sec() { return std::chrono::duration<double>(Device.GetTimerGlobal()->getElapsedTime()).count(); }
@@ -262,6 +266,8 @@ struct BulletTrack
     }
 };
 
+#include "portal_mod_replay_hands_data.inl" // portal-mod E53d
+
 struct Take
 {
     shared_str level;
@@ -273,6 +279,7 @@ struct Take
     xr_vector<SndTrack> snd;
     xr_vector<LightTrack> lights;
     xr_vector<BulletTrack> bullets;
+    HandsTrack hands; // portal-mod E53d: the first-person view (channel "HND1")
 
     void clear()
     {
@@ -285,6 +292,7 @@ struct Take
         snd.clear();
         lights.clear();
         bullets.clear();
+        hands.clear(); // portal-mod E53d
     }
     u16 weather_index(const shared_str& w)
     {
@@ -830,6 +838,7 @@ void trim(double cut)
                                       return tr.keys.empty() || (tr.keys.size() == 1 && !(tr.keys[0].flags & L_ON) && tr.pending <= cut);
                                   }),
                    T.lights.end());
+    T.hands.trim(cut); // portal-mod E53d
     rebuild_maps();
 }
 
@@ -860,6 +869,7 @@ void recorder_frame()
         T.level = Level().name();
     }
     T.t1 = t;
+    hands_rec_sample(T, t); // portal-mod E53d: the first-person frames drawn since, and this one to be taken
 
     CActor* actor = Actor();
     const Fvector center = actor ? actor->Position() : Device.vCameraPosition;
@@ -910,6 +920,7 @@ void recorder_frame()
                 inv.invert(H);
                 hud_map.mul_43(W, inv);
                 hud_ok = true;
+                hands_rec_map(T, t, hud_map); // portal-mod E53d: to take the HUD's particles back to the hands
             }
         }
     for (CPS_Instance* psi : g_pGamePersistent->ps_active)
@@ -960,7 +971,7 @@ void recorder_frame()
         tr.end = t;
         PsKey k;
         k.t = t;
-        k.flags = (V->IsDeferredStopped() ? PS_STOPPED : 0) | (po->pm_xform ? PS_XFORM : 0);
+        k.flags = (V->IsDeferredStopped() ? PS_STOPPED : 0) | (po->pm_xform ? PS_XFORM : 0) | (po->pm_hud ? PS_HUD : 0); // portal-mod E53d: PS_HUD
         k.parent = parent;
         k.rx = rx;
         k.vel = vel;
@@ -1271,6 +1282,7 @@ void extract(const Take& S, double a, double b, Take& D)
         d.open = false;
         D.bullets.push_back(std::move(d));
     }
+    D.hands.extract(S.hands, a, b); // portal-mod E53d
 }
 
 template <typename T>
@@ -1359,6 +1371,16 @@ bool save_take(const Take& T, LPCSTR name)
         W->w_stringZ(tr.ammo.size() ? tr.ammo.c_str() : ""); // E53c
         w_vec(W, tr.pts);
     }
+    // portal-mod E53d: the channels (take version 4): a count, then each as a four-letter tag, its size and its bytes
+    {
+        CMemoryWriter ch;
+        T.hands.save(&ch);
+        W->w_u32(1);
+        W->w("HND1", 4);
+        W->w_u32(u32(ch.size()));
+        if (ch.size())
+            W->w(ch.pointer(), ch.size());
+    }
     FS.w_close(W);
     return true;
 }
@@ -1380,7 +1402,7 @@ bool load_take(LPCSTR name, Take& T)
         F->r(magic, 8);
         const bool pmr = 0 == memcmp(magic, "PMRPLAY1", 8);
         const u32 ver = pmr ? F->r_u32() : 0;
-        if (pmr && (ver == TAKE_VERSION || ver == 2)) // E53c: version 2 has no ammo
+        if (pmr && ver >= 2 && ver <= TAKE_VERSION) // E53c: version 2 has no ammo; portal-mod E53d: 2 and 3 no channels
         {
             ok = true;
             F->r_stringZ(T.level);
@@ -1453,6 +1475,34 @@ bool load_take(LPCSTR name, Take& T)
                     F->r_stringZ(tr.ammo);
                 ok = r_vec(F, tr.pts) && !tr.pts.empty();
                 T.bullets.push_back(std::move(tr));
+            }
+            // portal-mod E53d: the channels (version 4); a tag not known here is skipped
+            const u32 nc = ok && ver >= 4 && F->elapsed() >= sizeof(u32) ? F->r_u32() : 0;
+            for (u32 i = 0; i < nc && ok; ++i)
+            {
+                if (F->elapsed() < 8)
+                {
+                    ok = false;
+                    break;
+                }
+                char tag[4];
+                F->r(tag, 4);
+                const u32 sz = F->r_u32();
+                if (sz > F->elapsed())
+                {
+                    ok = false;
+                    break;
+                }
+                if (0 == memcmp(tag, "HND1", 4))
+                {
+                    IReader sub(F->pointer(), sz);
+                    if (!T.hands.load(&sub))
+                    {
+                        Msg("! [portal_mod] replay: %s - its first-person channel is broken: no hands", rel);
+                        T.hands.clear();
+                    }
+                }
+                F->advance(sz);
             }
         }
     }
@@ -1716,6 +1766,7 @@ enum CamMode
     CAM_FREE,
     CAM_LOOK,
     CAM_EYE,
+    CAM_TAKE, // portal-mod E53d: the take's own camera (F)
 };
 
 struct PathKey
@@ -1780,6 +1831,19 @@ struct Player
         ref_light light; // a small fill light on the bullet while the camera rides with it (the films light it too)
     } bc;
 } P;
+
+#include "portal_mod_replay_hands.inl" // portal-mod E53d
+
+// replay_info: the active item of the frame shown (a replay) or of the last frame recorded (the ring)
+LPCSTR hands_item_name(const Take& T)
+{
+    u16 it = u16(-1);
+    if (P.open)
+        it = Hands.item;
+    else if (!T.hands.frames.empty())
+        it = T.hands.frames.back().item;
+    return it < T.hands.items.size() && T.hands.items[it].size() ? T.hands.items[it].c_str() : "-";
+}
 
 bool shift_down() { return P.down[DIK_LSHIFT] || P.down[DIK_RSHIFT]; }
 bool ctrl_down() { return P.down[DIK_LCONTROL] || P.down[DIK_RCONTROL]; }
@@ -1875,6 +1939,8 @@ void puppets_update(double t)
     if (P.mode == CAM_EYE && P.target >= 0 && P.target < int(P.take.objs.size()) &&
         obj_eval(P.take.objs[P.target], t, nullptr, nullptr, nullptr, &ep, nullptr))
         eye_id = P.take.objs[P.target].id;
+    if (eye_id == u16(-1))
+        eye_id = hands_hide_id(); // portal-mod E53d: the take's camera in the player's head
     for (u32 i = 0; i < P.take.objs.size(); ++i)
     {
         const ObjTrack& tr = P.take.objs[i];
@@ -1948,6 +2014,7 @@ void ps_place(u32 i, double t)
     u32 fl;
     if (!ps_eval(P.take.ps[i], t, parent, rx, vel, fl))
         return;
+    hands_ps(t, P.take.ps[i], p, parent, rx, vel, fl); // portal-mod E53d: the HUD's flame and smoke back on the hands
     p->V->UpdateParent(parent, vel, (fl & PS_XFORM) ? TRUE : FALSE);
     p->renderable.xform = rx;
     if ((fl & PS_STOPPED) && !p->stopped)
@@ -2922,7 +2989,7 @@ void camera_frame(float dt)
     if (P.bc.idx >= 0 && bcam_camera(dt)) // E53c: the bullet camera
         return;
     // the flight (the free camera and the look-at one move; the eye view does not)
-    if (!P.path_play && P.mode != CAM_EYE)
+    if (!P.path_play && P.mode != CAM_EYE && P.mode != CAM_TAKE) // portal-mod E53d: nor the take's camera
     {
         Fvector d = dir_of(P.h, P.pitch), r, mv{};
         r.crossproduct(Fvector().set(0.f, 1.f, 0.f), d);
@@ -2963,6 +3030,12 @@ void camera_frame(float dt)
         P.roll = k.roll;
         P.fov = k.fov;
         return;
+    }
+    if (P.mode == CAM_TAKE) // portal-mod E53d: the take's own camera
+    {
+        if (hands_take_camera())
+            return;
+        free_from_current();
     }
     if (P.mode == CAM_EYE)
     {
@@ -3132,6 +3205,7 @@ void player_frame()
         portal_mod_replay_rain_dt = float(rdt);
     }
     bullets_update(P.t, rate);
+    hands_update(P.t); // portal-mod E53d: the take's camera and the hands
     puppets_update(P.t);
     ps_update(P.t, coarse);
     lights_update(P.t);
@@ -3291,6 +3365,7 @@ bool player_open(Take&& T, LPCSTR name)
     P.lights.clear();
     P.lights.resize(P.take.lights.size());
     P.tracers.clear();
+    hands_open(); // portal-mod E53d
     P.t = P.prev_t = 0.0;
     P.speed = 1.f;
     P.paused = false;
@@ -3349,6 +3424,7 @@ void player_close()
     for (Puppet*& p : P.puppets)
         xr_delete(p);
     P.puppets.clear();
+    hands_close(); // portal-mod E53d
     for (BulletModel*& m : P.bmodels) // E53c
         xr_delete(m);
     P.bmodels.clear();
@@ -3404,7 +3480,7 @@ void open_now()
 }
 
 const char* const MODE_NAMES[] = {"\xF1\xE2\xEE\xE1\xEE\xE4\xED\xE0\xFF", "\xF1\xEB\xE5\xE6\xE5\xED\xE8\xE5",
-                                  "\xE3\xEB\xE0\xE7\xE0"};
+                                  "\xE3\xEB\xE0\xE7\xE0", "\xE4\xF3\xE1\xEB\xFC"}; // portal-mod E53d: the take's camera
 } // namespace
 
 //======================================================================================================================
@@ -3490,7 +3566,7 @@ bool key_press(int dik)
     P.down[dik] = true;
     P.pressed[dik] = true;
     const bool sh = shift_down();
-    if (P.bc.idx >= 0 && (dik == DIK_LEFT || dik == DIK_RIGHT || dik == DIK_HOME || dik == DIK_P || dik == DIK_T || dik == DIK_V || dik == DIK_K))
+    if (P.bc.idx >= 0 && (dik == DIK_LEFT || dik == DIK_RIGHT || dik == DIK_HOME || dik == DIK_P || dik == DIK_T || dik == DIK_V || dik == DIK_K || dik == DIK_F)) // portal-mod E53d: F
         bcam_stop(false); // E53c: another camera or another moment
     switch (dik)
     {
@@ -3576,6 +3652,17 @@ bool key_press(int dik)
         P.roll = 0.f;
         P.fov = P.fov0;
         P.bc.fov = 24.f; // E53c
+        break;
+    case DIK_F: // portal-mod E53d: the take's own camera (the hands on it)
+        if (P.mode == CAM_TAKE)
+            free_from_current();
+        else if (!lua_take_cam(true))
+            message("\xE2 \xE4\xF3\xE1\xEB\xE5 \xED\xE5\xF2 \xEA\xE0\xEC\xE5\xF0\xFB \xE8\xE3\xF0\xFB (\xE4\xF3\xE1\xEB\xFC \xE4\xEE E53d)");
+        break;
+    case DIK_G: // portal-mod E53d: the hands and the gun on this camera: shown / hidden
+        Hands.user = hands_want() ? 0 : 1;
+        Hands.last_mode = hands_mode_key();
+        message(Hands.user ? "\xF0\xF3\xEA\xE8: \xEF\xEE\xEA\xE0\xE7\xE0\xED\xFB" : "\xF0\xF3\xEA\xE8: \xF1\xEA\xF0\xFB\xF2\xFB");
         break;
     case DIK_H: P.hint = (P.hint + 1) % 3; break;
     default:
@@ -3686,9 +3773,10 @@ void render_ui()
         xr_sprintf(spd, "x1/%d", iFloor(1.f / sp + 0.5f));
     else
         xr_sprintf(spd, "x%.3g", sp);
-    xr_sprintf(line, "\xCF\xCE\xC2\xD2\xCE\xD0 %s   %6.3f / %.2f   %s %s   \xEA\xE0\xEC\xE5\xF0\xE0: %s   FOV %.0f   %.2g \xEC/\xF1   \xEA\xEB\xFE\xF7\xE8: %u (\xF1\xEB\xEE\xF2 %d)   H - \xEF\xEE\xE4\xF1\xEA\xE0\xE7\xEA\xE0",
-               P.name.c_str(), float(P.t), float(P.take.t1), spd, P.paused ? "||" : ">", mode, P.bc.idx >= 0 ? P.bc.fov : P.fov, P.fly,
-               u32(P.keys.size()), P.slot);
+    xr_sprintf(line, "\xCF\xCE\xC2\xD2\xCE\xD0 %s   %6.3f / %.2f   %s %s   \xEA\xE0\xEC\xE5\xF0\xE0: %s   FOV %.0f   %.2g \xEC/\xF1   \xEA\xEB\xFE\xF7\xE8: %u (\xF1\xEB\xEE\xF2 %d)   \xF0\xF3\xEA\xE8: %s   H - \xEF\xEE\xE4\xF1\xEA\xE0\xE7\xEA\xE0", // portal-mod E53d: the hands
+               P.name.c_str(), float(P.t), float(P.take.t1), spd, P.paused ? "||" : ">", mode, P.bc.idx >= 0 ? P.bc.fov : (P.mode == CAM_TAKE && Hands.cam_ok ? Hands.fov : P.fov), P.fly, // portal-mod E53d: the take's FOV
+              
+               u32(P.keys.size()), P.slot, Hands.drawn ? "\xE4\xE0" : "\xED\xE5\xF2");
     float y = H * 0.95f;
     if (P.hint == 2)
     {
@@ -3699,6 +3787,7 @@ void render_ui()
             "K - \xEA\xEB\xFE\xF7 \xEA\xE0\xEC\xE5\xF0\xFB, Delete - \xF3\xE1\xF0\xE0\xF2\xFC \xEF\xEE\xF1\xEB\xE5\xE4\xED\xE8\xE9 (Shift - \xE2\xF1\xE5), P - \xEF\xEE\xEB\xB8\xF2 \xEF\xEE \xEA\xEB\xFE\xF7\xE0\xEC, 1-9 - \xF1\xEB\xEE\xF2 \xEF\xF3\xF2\xE8",
             "T - \xF1\xEB\xE5\xE4\xE8\xF2\xFC \xE7\xE0 \xEE\xE1\xFA\xE5\xEA\xF2\xEE\xEC \xE2 \xF6\xE5\xED\xF2\xF0\xE5 \xEA\xE0\xE4\xF0\xE0, V - \xE3\xEB\xE0\xE7\xE0\xEC\xE8 \xEF\xE5\xF0\xF1\xEE\xED\xE0\xE6\xE0 \xE2 \xF6\xE5\xED\xF2\xF0\xE5 \xEA\xE0\xE4\xF0\xE0, H - \xEF\xEE\xE4\xF1\xEA\xE0\xE7\xEA\xE0",
             "B - \xEA\xE0\xEC\xE5\xF0\xE0 \xE7\xE0 \xEF\xF3\xEB\xE5\xE9: \xEB\xE5\xF2\xFF\xF9\xE5\xE9 \xE2 \xF6\xE5\xED\xF2\xF0\xE5 \xEA\xE0\xE4\xF0\xE0 \xE8\xEB\xE8 \xF1\xEB\xE5\xE4\xF3\xFE\xF9\xE5\xE9 \xE2\xFB\xEF\xF3\xF9\xE5\xED\xED\xEE\xE9 (\xE7\xE0\xEC\xE5\xE4\xEB\xFF\xE5\xF2 \xF1\xE0\xEC\xE0; B \xE5\xF9\xB8 \xF0\xE0\xE7 - \xE2\xFB\xE9\xF2\xE8)",
+            "F - \xEA\xE0\xEC\xE5\xF0\xE0 \xE4\xF3\xE1\xEB\xFF (\xEA\xE0\xEA \xE2 \xE8\xE3\xF0\xE5, \xF1 \xF0\xF3\xEA\xE0\xEC\xE8 \xE8 \xEE\xF0\xF3\xE6\xE8\xE5\xEC), G - \xF0\xF3\xEA\xE8 \xE8 \xEE\xF0\xF3\xE6\xE8\xE5 \xED\xE0 \xEA\xE0\xEC\xE5\xF0\xE5: \xEF\xEE\xEA\xE0\xE7\xE0\xF2\xFC / \xF1\xEA\xF0\xFB\xF2\xFC", // portal-mod E53d
         };
         F->SetColor(0xE0FFFFFF);
         float hy = y - lh * (float(_countof(help)) + 1.5f);
@@ -3901,6 +3990,50 @@ bool lua_path_load(int slot)
 }
 void lua_hint(int level) { P.hint = level < 0 ? 0 : (level > 2 ? 2 : level); }
 float lua_clock() { return float(Device.dwTimeContinual) / 1000.f; }
+// portal-mod E53d: the first-person view (portal_mod_replay_hands.inl)
+void hud_capture_begin() { hands_cap_begin(); }
+void hud_capture_draw(IRenderVisual* v, const Fmatrix& m) { hands_cap_draw(v, m); }
+void hud_capture_end() { hands_cap_end(); }
+bool hud_render(u32 context_id)
+{
+    if (!P.open)
+        return false;
+    hands_render(context_id);
+    return true;
+}
+bool lua_take_cam(bool on)
+{
+    if (!P.open)
+        return false;
+    if (!on)
+    {
+        if (P.mode == CAM_TAKE)
+            free_from_current();
+        return true;
+    }
+    if (P.take.hands.frames.empty())
+        return false;
+    if (P.bc.idx >= 0)
+        bcam_stop(false);
+    P.path_play = false;
+    P.mode = CAM_TAKE;
+    P.target = -1;
+    Hands.user = -1;
+    Hands.last_mode = hands_mode_key();
+    return true;
+}
+void lua_hands(bool on)
+{
+    Hands.user = on ? 1 : 0;
+    Hands.last_mode = hands_mode_key();
+}
+void lua_hands_default()
+{
+    Hands.user = -1;
+    Hands.last_mode = hands_mode_key();
+}
+int lua_hands_state() { return P.open && Hands.drawn ? int(Hands.draws.size()) : 0; }
+
 LPCSTR lua_info()
 {
     static string1024 s; // E53c: longer (the bullet camera's fields)
@@ -3923,10 +4056,13 @@ LPCSTR lua_info()
         models_now += m->in_space ? 1 : 0;
     const BulletTrack* bc = P.open && P.bc.idx >= 0 && P.bc.idx < int(P.take.bullets.size()) ? &P.take.bullets[P.bc.idx] : nullptr;
     xr_sprintf(s, "%s len=%.2f samples=%u objs=%u keys=%u bones=%u ps=%u snd=%u lights=%u bullets=%u puppets_now=%u ps_now=%u drawn=%u rec=%d "
-                  "models_now=%u bcam=%d bcam_rate=%.6f bcam_ammo=%s bcam_model=%s",
+                  "models_now=%u bcam=%d bcam_rate=%.6f bcam_ammo=%s bcam_model=%s hands=%u hands_user=%d take_cam=%d hud_frames=%u hud_drawn=%u "
+                  "hud_slots=%u hud_item=%s", // portal-mod E53d
                P.open ? "replay" : "ring", float(T.t1 - T.t0), u32(T.samples.size()), u32(T.objs.size()), keys, bones, u32(T.ps.size()), u32(T.snd.size()),
                u32(T.lights.size()), u32(T.bullets.size()), vis_now, ps_now, P.open ? u32(P.tracers.size()) : 0u, R.manual ? 1 : 0, models_now,
-               bc ? P.bc.phase : 0, bc ? P.bc.rate : 0.f, bc && bc->ammo.size() ? bc->ammo.c_str() : "-", bc && bc->model.size() ? bc->model.c_str() : "-");
+               bc ? P.bc.phase : 0, bc ? P.bc.rate : 0.f, bc && bc->ammo.size() ? bc->ammo.c_str() : "-", bc && bc->model.size() ? bc->model.c_str() : "-",
+               P.open && Hands.drawn ? u32(Hands.draws.size()) : 0u, Hands.user, P.open && P.mode == CAM_TAKE ? 1 : 0, u32(T.hands.frames.size()),
+               Hands.frames_drawn, u32(T.hands.slots.size()), hands_item_name(T)); // portal-mod E53d
     return s;
 }
 Fvector lua_object_pos(int id)
