@@ -1174,7 +1174,8 @@ void breach_blast(const Fvector& pos, float hit)
                 continue;
             const CDB::TRI& t = T[R.element];
             const u8 m = chip_class(u16(t.material));
-            if (m >= NMAT || piece_of_tri((u32)R.element) >= 0 || portal_mod_statics::owns((u32)R.element))
+            if (m >= NMAT || piece_of_tri((u32)R.element) >= 0 || portal_mod_statics::owns((u32)R.element) ||
+                portal_mod_trees::owns((u32)R.element)) // E62b: nor a trunk
                 continue;
             Fvector tn;
             tn.mknormal(V[t.verts[0]], V[t.verts[1]], V[t.verts[2]]);
@@ -3285,7 +3286,10 @@ void bullet_hit(const SBullet& b, u32 tri, const Fvector& point, const Fvector& 
     {
         const float thin = pc < 0 ? portal_mod_statics::thin_at(tri) : 0.f; // E59: a plank fence's piece: holes, no dents
         const u8 hmat = pc < 0 && mat >= NMAT && is_sheet(target_material) ? HOLE_SHEET : mat; // E60: a sheet holed where it is hit
-        hole_hit(point, b.dir, dmg, hmat, pc, thin);
+        // E62b: a pole's, a lamp's, a slab's or a trunk's own faces take no hole (they break, fall by the damage; since
+        // far_face measures a closed wall a round bored a 0.39 m pole and the next ones flew through it): a plank's do
+        if (pc >= 0 || thin > 0.f || (!portal_mod_statics::owns(tri) && !portal_mod_trees::owns(tri)))
+            hole_hit(point, b.dir, dmg, hmat, pc, thin);
         if (thin <= 0.f)
             dent_hit(point, normal, b.dir, dmg, mat, pc, false); // E56: any face, any thickness
     }

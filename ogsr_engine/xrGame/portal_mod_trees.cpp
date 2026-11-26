@@ -988,6 +988,8 @@ void apply_saved(const xr_vector<Saved>& list)
 }
 } // namespace
 
+bool owns(u32 tri) { return S.built && tree_of_tri(tri) >= 0; } // E62b
+
 void bullet_hit(const Fvector& point, const Fvector& dir, u32 tri, float dmg)
 {
     load_cfg();

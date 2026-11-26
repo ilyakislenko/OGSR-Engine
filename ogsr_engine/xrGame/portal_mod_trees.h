@@ -18,6 +18,8 @@ void reset(); // portal_mod_destruct::shutdown (the level goes, before the physi
 void save_game(LPCSTR sav_path); // portal_mod_destruct::save_game
 void load_game(LPCSTR sav_path); // portal_mod_destruct::load_game (nullptr: a new game)
 
+bool owns(u32 tri); // E62b: a level collision triangle of a tree's trunk (rounds leave it no hole, a breach leaves it alone)
+
 // Lua (level.trees_*)
 LPCSTR lua_info();
 LPCSTR lua_near(const Fvector& pos, float radius); // "id|x|y|z|height|trunk r|hp|damage|state|distance;" nearest first

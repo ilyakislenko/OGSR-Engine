@@ -1625,10 +1625,12 @@ LPCSTR lua_near(const Fvector& pos, float radius, LPCSTR kinds)
 // the level's collision inside the object's first box (where it stands): rays across its thinnest side on a 6 x 4 grid
 // over the inner 0.7 of the others (a fence's posts at its ends stand), from both sides; one that meets something inside
 // the box - not on its faces across the rays (what a crate stands on) - counts (standing: most; broken: none, or a wall
-// of air was left there)
+// of air was left there). E62b: only faces of the piece's own materials count - the level's other things inside its box
+// stand before and after it (Escape: the invisible wall, materials\fake, from 1.5 m up over a plank fence; a metal pipe
+// through a concrete slab); a ray goes on past them. "hits/rays", then " other N <material>" for those met.
 LPCSTR lua_probe(int id)
 {
-    static string64 buf;
+    static string256 buf;
     xr_strcpy(buf, "0/0");
     if (!S.loaded || !g_pGameLevel || id < 0 || id >= (int)S.objs.size() || S.objs[id].boxes.empty())
         return buf;
@@ -1647,33 +1649,63 @@ LPCSTR lua_probe(int id)
     u = (n + 1) % 3, v = (n + 2) % 3;
     if (h[v] > h[u])
         std::swap(u, v);
-    int hits = 0, rays = 0;
+    const CDB::TRI* T = Level().ObjectSpace.GetStaticTris();
+    u16 own_m[8];
+    int nm = 0;
+    for (u32 k = o.c0; k < o.c0 + o.nc && nm < 8; ++k) // a sunk triangle keeps its material
+    {
+        const u16 m = u16(T[S.ctris[k]].material);
+        if (std::find(own_m, own_m + nm, m) == own_m + nm)
+            own_m[nm++] = m;
+    }
+    int hits = 0, rays = 0, other = 0;
+    u16 other_m = u16(-1);
     for (int iu = 0; iu < 6; ++iu)
         for (int iv = 0; iv < 4; ++iv)
         {
             Fvector m = c;
             m.mad(ax[u], h[u] * 0.7f * (-1.f + 2.f * iu / 5.f));
             m.mad(ax[v], h[v] * 0.7f * (-1.f + 2.f * iv / 3.f));
-            bool hit = false;
+            bool hit = false, met = false;
             for (float side : {1.f, -1.f})
             {
                 Fvector d, e;
                 d.set(ax[n]).mul(-side);
                 e.mad(m, ax[n], side * (h[n] + 0.1f));
-                collide::rq_result R;
-                if (Level().ObjectSpace.RayPick(e, d, 2.f * (h[n] + 0.1f), collide::rqtStatic, R, nullptr) && R.element >= 0)
+                float left = 2.f * (h[n] + 0.1f);
+                for (int tries = 0; tries < 6 && left > 0.f; ++tries)
                 {
+                    collide::rq_result R;
+                    if (!Level().ObjectSpace.RayPick(e, d, left, collide::rqtStatic, R, nullptr) || R.element < 0)
+                        break;
                     Fvector q, r;
                     q.mad(e, d, R.range);
                     r.sub(q, c);
                     const float in_n = _max(h[n] - 0.04f, 0.03f);
-                    hit = hit || (_abs(r.dotproduct(ax[n])) <= in_n && _abs(r.dotproduct(ax[u])) <= h[u] + 0.02f && _abs(r.dotproduct(ax[v])) <= h[v] + 0.02f);
+                    const bool inside = _abs(r.dotproduct(ax[n])) <= in_n && _abs(r.dotproduct(ax[u])) <= h[u] + 0.02f &&
+                        _abs(r.dotproduct(ax[v])) <= h[v] + 0.02f;
+                    const u16 tm = u16(T[R.element].material);
+                    if (!nm || std::find(own_m, own_m + nm, tm) != own_m + nm)
+                    {
+                        hit = hit || inside;
+                        break;
+                    }
+                    if (inside)
+                        met = true, other_m = tm;
+                    e.mad(q, d, 0.002f); // on past the level's other thing
+                    left -= R.range + 0.002f;
                 }
             }
             hits += hit;
+            other += met && !hit;
             ++rays;
         }
     xr_sprintf(buf, "%d/%d", hits, rays);
+    if (other)
+    {
+        const SGameMtl* mt = GMLib.GetMaterialByIdx(other_m);
+        xr_sprintf(buf, "%d/%d other %d %s", hits, rays, other, mt ? mt->m_Name.c_str() : "?");
+    }
     return buf;
 }
 
