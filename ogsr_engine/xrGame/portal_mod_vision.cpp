@@ -405,6 +405,57 @@ Grade g_grade; // the look now, eased toward the mode's (a switch blends in ~0.3
 float g_shift_t{-100.f}; // real time of a Shift press that the keyboard's own state does not show (a script's, the lab's)
 std::atomic<int> g_skip0{-1}, g_skip1{-1}; // E70's two targets while two guns are out (pm_vision.update): its brackets are theirs
 
+// A scene's own texts (the user: "in After Effects the texts can be tuned to specific words and events; make scenes able
+// to put in their own"): pm_vision.card / tag / say / status / clear / on (scripts\pm_vision.script). Set from Lua's
+// thread, kept under g_scene_mx, drawn by the render's; their times are real seconds (a replay's scene re-issues them
+// from its replay_update at the same moments).
+struct SceneCard
+{
+    xr_vector<xr_string> lines;
+    xr_string threat; // the threat line's word ("": the vision's own)
+    float threat_v{-1.f}; // a threat given as a number (its word and colour)
+    int col{-1}; // the threat line's colour: -1 by the threat, 0 normal, 1 hot, 2 warm
+    bool primary{}; // makes him the card's target
+    float until{};
+};
+struct SceneTag
+{
+    xr_string text;
+    float until{};
+};
+struct Plate
+{
+    xr_string text;
+    int at{1}; // 1 the middle of the screen, 2 a world point, 3 an object's bone
+    Fvector pos{};
+    u16 obj{u16(-1)};
+    xr_string bone;
+    float t0{}, secs{};
+};
+enum
+{
+    EV_ACQUIRE,
+    EV_LOCK,
+    EV_KILL,
+    EV_LOST,
+    EV_HIT,
+    EV_COUNT
+};
+const LPCSTR EVN[EV_COUNT] = {"acquire", "lock", "kill", "lost", "hit_actor"};
+std::mutex g_scene_mx;
+xr_map<u16, SceneCard> g_scene_cards;
+xr_map<u16, SceneTag> g_scene_tags;
+xr_map<u16, xr_string> g_scene_stamps; // a kill's stamp, a scene's
+xr_vector<Plate> g_plates;
+xr_vector<xr_string> g_scene_log; // lines for the log from Lua: added on the render's thread
+xr_string g_status; // the mode / status line, a scene's for a while
+float g_status_until{-1.f};
+bool g_hook[EV_COUNT]{}; // the events a scene took over (its on(event)): the vision's own line waits for it
+xr_vector<xr_string> g_events; // queued for pm_vision.update() (level.vision_events())
+bool g_card_new{}; // a scene card came: the card is typed again
+xr_string g_log_text; // the log as it is shown (level.vision_log_text())
+float g_rn{}; // real time of this frame
+
 struct Target
 {
     u16 id{};
@@ -1021,6 +1072,41 @@ void refresh_data(Target& g, CObject* O)
     assess(g, O, io);
 }
 
+LPCSTR threat_word(float th);
+u32 threat_col(float th);
+
+// an event: the vision's own log line - or, when a scene took it over (on(event)), queued for the scene with that line
+// as its default (the scene answers with its own text, a card, or nothing: the default then)
+void event(int ev, const Target* g, const xr_string& line)
+{
+    bool hooked;
+    {
+        std::lock_guard<std::mutex> lk(g_scene_mx);
+        hooked = g_hook[ev];
+        if (hooked && g_events.size() < 64)
+            g_events.push_back(fmt("event=%s\tid=%d\tnum=%d\tname=%s\tthreat=%.3f\tdist=%.1f\tmonster=%d\tdefault=%s", EVN[ev], g ? int(g->id) : -1,
+                                   g ? g->num : 0, g ? g->name.c_str() : "", g ? g->threat : 0.f, g ? g->dist : 0.f, g && g->monster ? 1 : 0, line.c_str()));
+    }
+    if (!hooked && line.size())
+        log_add(line);
+}
+
+// (under g_scene_mx)
+const SceneCard* scene_card(u16 id)
+{
+    auto it = g_scene_cards.find(id);
+    return it != g_scene_cards.end() ? &it->second : nullptr;
+}
+const SceneTag* scene_tag(u16 id)
+{
+    auto it = g_scene_tags.find(id);
+    return it != g_scene_tags.end() ? &it->second : nullptr;
+}
+u32 scene_col(const SceneCard& sc, float th)
+{
+    return sc.col == 1 ? C.col_hot : sc.col == 2 ? C.col_warm : sc.col == 0 ? C.col : threat_col(sc.threat_v >= 0.f ? sc.threat_v : th);
+}
+
 void gather(xr_vector<Cand>& out)
 {
     out.clear();
@@ -1196,7 +1282,7 @@ void update_targets(float dt)
         if (g.alive && !c.alive)
         {
             g.t_dead = g_now;
-            log_add(fmt("%s-%02d: %s", T("target_prefix", "T"), g.num, T("log_kill", "TERMINATED")));
+            event(EV_KILL, &g, fmt("%s-%02d: %s", T("target_prefix", "T"), g.num, T("log_kill", "TERMINATED")));
         }
         g.alive = c.alive;
         if (c.O)
@@ -1234,9 +1320,9 @@ void update_targets(float dt)
         {
             g_targets[c.id] = g;
             if (c.ghost)
-                log_add(T("log_heat", "HEAT SIGNATURE: OPTICS NEGATIVE"));
+                event(EV_ACQUIRE, &g_targets[c.id], T("log_heat", "HEAT SIGNATURE: OPTICS NEGATIVE"));
             else
-                log_add(fmt("%s-%02d %s: %s", T("target_prefix", "T"), g.num, T("log_found", "ACQUIRED"), g.name.c_str()));
+                event(EV_ACQUIRE, &g_targets[c.id], fmt("%s-%02d %s: %s", T("target_prefix", "T"), g.num, T("log_found", "ACQUIRED"), g.name.c_str()));
         }
     }
     // the springs (an under-damped spring: ~12 % overshoot), the lost ones dropped
@@ -1246,6 +1332,8 @@ void update_targets(float dt)
         Target& g = it->second;
         if (g.frame != g_frame || (g.t_dead >= 0.f && g_now - g.t_dead > 1.2f))
         {
+            if (g.t_dead < 0.f)
+                event(EV_LOST, &g, "");
             it = g_targets.erase(it);
             continue;
         }
@@ -1307,7 +1395,7 @@ void update_lock()
         Target& g = g_targets[best];
         // a kick outward: the brackets jump and settle on it
         g.vel[0] -= 260.f * S, g.vel[1] -= 260.f * S, g.vel[2] += 260.f * S, g.vel[3] += 260.f * S;
-        log_add(fmt("%s: %s-%02d", T("log_lock", "LOCK"), T("target_prefix", "T"), g.num));
+        event(EV_LOCK, &g, fmt("%s: %s-%02d", T("log_lock", "LOCK"), T("target_prefix", "T"), g.num));
     }
 }
 
@@ -1403,15 +1491,28 @@ void draw_lite(const Target& g, float a, const Mode& M)
         if (M.tags && !(primary && M.card && !g.ghost)) // (the card's man: his distance is on the card's first line)
             text(x1 + 6.f * S, y0 - 2.f * S, fmt("%.0f %s", g.dist, T("m", "M")).c_str(), F_SM, rgba(C.col, al * 0.85f));
     }
-    if (!primary || M.card == 0 || g.ghost)
+    if (const SceneTag* tg = scene_tag(g.id); tg && M.brackets > 0)
+        text(x0, y0 - 20.f * S, tg->text.c_str(), F_SM, rgba(C.col_hot, a * 0.95f));
+    const SceneCard* sc = scene_card(g.id);
+    if (!primary || (M.card == 0 && !sc) || g.ghost)
         return;
     xr_vector<xr_string> lines;
-    lines.push_back(fmt("%s: %s \xB7 %.0f %s", T("threat", "THREAT"), threat_word(g.threat), g.dist, T("m", "M")));
-    if (g.why.size())
-        lines.push_back(g.why);
-    lines.push_back(g.name);
-    if (!g.monster && g.weapon.size())
-        lines.push_back(g.weapon);
+    u32 head = threat_col(g.threat);
+    if (sc)
+    {
+        lines.push_back(fmt("%s: %s \xB7 %.0f %s", T("threat", "THREAT"), sc->threat.size() ? sc->threat.c_str() : threat_word(g.threat), g.dist, T("m", "M")));
+        lines.insert(lines.end(), sc->lines.begin(), sc->lines.end());
+        head = scene_col(*sc, g.threat);
+    }
+    else
+    {
+        lines.push_back(fmt("%s: %s \xB7 %.0f %s", T("threat", "THREAT"), threat_word(g.threat), g.dist, T("m", "M")));
+        if (g.why.size())
+            lines.push_back(g.why);
+        lines.push_back(g.name);
+        if (!g.monster && g.weapon.size())
+            lines.push_back(g.weapon);
+    }
     const float lh = 19.f * S;
     float cw = 0.f;
     for (const auto& s : lines)
@@ -1420,7 +1521,7 @@ void draw_lite(const Target& g, float a, const Mode& M)
     card_place(g.id, x0, y0, x1, y1, cw, lh * float(lines.size()), tx, ty);
     for (size_t i = 0; i < lines.size(); ++i)
     {
-        const u32 col = i == 0 ? rgba(threat_col(g.threat), a * 0.95f) : rgba(C.col, a * (i == 1 ? 0.8f : 0.7f));
+        const u32 col = i == 0 ? rgba(head, a * 0.95f) : rgba(C.col, a * (i == 1 ? 0.8f : 0.7f));
         typed(tx, ty + float(i) * lh, lines[i].c_str(), F_SM, col, g_primary_t + 0.05f + float(i) * 0.07f, 90.f);
     }
 }
@@ -1445,7 +1546,8 @@ void draw_target(const Target& g, float a)
         brackets(x0, y0, x1, y1, 16.f * S, 4.f * S, rgba(C.col, a * blink * (1.f - q * 0.6f)));
         seg(x0, y0, x1, y1, 2.f * S, rgba(C.col, a * blink * (1.f - q)));
         seg(x1, y0, x0, y1, 2.f * S, rgba(C.col, a * blink * (1.f - q)));
-        LPCSTR st = T("stamp_kill", "TERMINATED");
+        auto sst = g_scene_stamps.find(g.id);
+        LPCSTR st = sst != g_scene_stamps.end() ? sst->second.c_str() : T("stamp_kill", "TERMINATED");
         const float sx = std::min(x1 + 14.f * S, SW - 60.f * S - text_w(st, F_LBL));
         text(sx, y0, st, F_LBL, rgba(C.col, a * blink * std::min(1.f, 2.2f * (1.f - q))));
         return;
@@ -1472,6 +1574,8 @@ void draw_target(const Target& g, float a)
         rect(x0, by, x0 + (x1 - x0) * g.health, by + 3.f * S, rgba(g.health < 0.3f ? C.col_hot : C.col, a * 0.75f));
     }
     LPCSTR P = T("target_prefix", "T");
+    if (const SceneTag* tg = scene_tag(g.id))
+        text(x0, y0 - 22.f * S, tg->text.c_str(), F_TAG, rgba(C.col_hot, a * 0.95f));
     if (g.ghost)
     {
         // the heat reading (the AE comp's heat label) and a scanner ring turning round it
@@ -1514,6 +1618,15 @@ void draw_target(const Target& g, float a)
                                   : (g.weapon.find(T("weapon_away", "NOT DRAWN")) == xr_string::npos && g.weapon != T("no_weapon", "NONE")
                                          ? T("aiming", "WEAPON TRAINED ON UNIT")
                                          : T("enemy_of", "UNIT MARKED AS ENEMY")));
+    // a scene's card: its lines under the number and threat
+    u32 head = threat_col(g.threat);
+    if (const SceneCard* sc = scene_card(g.id))
+    {
+        lines.clear();
+        lines.push_back(fmt("%s-%02d  %s: %s", P, g.num, T("threat", "THREAT"), sc->threat.size() ? sc->threat.c_str() : threat_word(g.threat)));
+        lines.insert(lines.end(), sc->lines.begin(), sc->lines.end());
+        head = scene_col(*sc, g.threat);
+    }
     const float lh = 20.f * S;
     float cw = 0.f;
     for (const auto& s : lines)
@@ -1534,7 +1647,7 @@ void draw_target(const Target& g, float a)
     {
         const float t0 = g_primary_t + 0.15f + float(i) * 0.20f;
         const int f = i == 0 ? F_TAG : F_SM;
-        const u32 col = i == 0 ? rgba(threat_col(g.threat), a) : rgba(C.col, a * (i == lines.size() - 1 && g.aiming ? 0.95f : 0.82f));
+        const u32 col = i == 0 ? rgba(head, a) : rgba(C.col, a * (i == lines.size() - 1 && g.aiming ? 0.95f : 0.82f));
         typed(tx, ty + (i == 0 ? 0.f : 6.f * S) + float(i) * lh, lines[i].c_str(), f, col, t0);
     }
 }
@@ -1576,6 +1689,8 @@ void draw_chrome(float a)
     }
     if (M.chrome)
         draw_frame(a);
+    else if (g_status_until > g_rn) // a scene's status line in the light modes too
+        text(110.f * S, 60.f * S, g_status.c_str(), F_LBL, rgba(C.col, a * 0.9f));
     if (M.streams)
         draw_streams(a);
     if (M.telemetry)
@@ -1604,7 +1719,7 @@ void draw_frame(float a)
         if (g.alive && g.t_dead < 0.f)
             ++total, hostile += g.hostile ? 1 : 0;
     LPCSTR mode = g_locked ? T("mode_lock", "MODE: TARGET LOCK") : hostile ? T("mode_threat", "MODE: THREAT") : T("mode_scan", "MODE: SCAN");
-    text(110.f * S, 60.f * S, mode, F_LBL, rgba(C.col, a));
+    text(110.f * S, 60.f * S, g_status_until > g_rn ? g_status.c_str() : mode, F_LBL, rgba(C.col, a));
     float hp = 1.f, pw = 1.f;
     if (CActor* me = Actor())
     {
@@ -1775,6 +1890,73 @@ void draw_flash(float a, float rn)
     g_now = keep;
     const float e = ease(t / 0.25f) * (w * 0.5f + 14.f * S);
     hline(SW * 0.5f - e, SW * 0.5f + e, 136.f * S, 1.f * S, rgba(C.col, fa * 0.55f));
+}
+
+// a scene's plates (pm_vision.say(text, {at = "center"}) and the like): typed in a character at a time, held, wiped out
+// from the left; in the middle of the screen between two lines that open out (the series' AE plates), or at a world
+// point / an object's bone with a mark
+void draw_plates(float a)
+{
+    for (const Plate& p : g_plates)
+    {
+        const float t = g_rn - p.t0;
+        if (t < 0.f)
+            continue;
+        float x, y;
+        int f = F_BIG;
+        if (p.at == 1)
+            x = SW * 0.5f, y = SH * 0.22f;
+        else
+        {
+            Fvector w = p.pos;
+            if (p.at == 3)
+            {
+                CObject* O = Level().Objects.net_Find(p.obj);
+                IKinematics* K = O && O->Visual() ? O->Visual()->dcast_PKinematics() : nullptr;
+                if (!O)
+                    continue;
+                w = O->Position();
+                w.y += 1.6f;
+                if (K && p.bone.size())
+                    if (const u16 b = K->LL_BoneID(p.bone.c_str()); b != BI_NONE)
+                        O->XFORM().transform_tiny(w, K->LL_GetTransform(b).c);
+            }
+            if (!project(w, x, y))
+                continue;
+            f = F_TAG;
+        }
+        const u32 col = rgba(C.col, a);
+        const xr_string& s = p.text;
+        const float w = text_w(s.c_str(), f);
+        const float x0 = x - w * 0.5f;
+        const float ty = p.at == 1 ? y : y - 40.f * S;
+        const float out = t - p.secs; // the wipe
+        const float keep = g_now;
+        g_now = t;
+        if (out < 0.f)
+            typed(x0, ty, s.c_str(), f, col, 0.f, 40.f);
+        else
+        {
+            const int k = std::min(int(s.size()), int(float(s.size()) * out / 0.35f));
+            if (k < int(s.size()))
+                text(x0 + float(k) * g_font[f].adv * S, ty, s.c_str() + k, f, col);
+        }
+        g_now = keep;
+        const float fa = out < 0.f ? 1.f : clampr(1.f - out / 0.35f, 0.f, 1.f);
+        if (p.at == 1)
+        {
+            const float e = ease(t / 0.3f) * (w * 0.5f + 34.f * S) * fa;
+            hline(x - e, x + e, y - 14.f * S, 2.f * S, rgba(C.col, a * 0.75f));
+            hline(x - e, x + e, y + 48.f * S, 2.f * S, rgba(C.col, a * 0.75f));
+        }
+        else
+        {
+            seg(x - 5.f * S, y, x, y - 5.f * S, 1.5f * S, rgba(C.col, a * fa));
+            seg(x, y - 5.f * S, x + 5.f * S, y, 1.5f * S, rgba(C.col, a * fa));
+            seg(x + 5.f * S, y, x, y + 5.f * S, 1.5f * S, rgba(C.col, a * fa));
+            seg(x, y + 5.f * S, x - 5.f * S, y, 1.5f * S, rgba(C.col, a * fa));
+        }
+    }
 }
 
 void set_mode(int i)
@@ -1964,6 +2146,24 @@ void before_render()
         return;
     }
     sync_game_hud();
+    g_rn = rn;
+    {
+        // a scene's texts: the spent ones go, its log lines come in
+        xr_vector<xr_string> lines;
+        {
+            std::lock_guard<std::mutex> lk(g_scene_mx);
+            for (auto it = g_scene_cards.begin(); it != g_scene_cards.end();)
+                it = it->second.until < rn ? g_scene_cards.erase(it) : std::next(it);
+            for (auto it = g_scene_tags.begin(); it != g_scene_tags.end();)
+                it = it->second.until < rn ? g_scene_tags.erase(it) : std::next(it);
+            g_plates.erase(std::remove_if(g_plates.begin(), g_plates.end(), [rn](const Plate& p) { return rn > p.t0 + p.secs + 0.4f; }), g_plates.end());
+            lines.swap(g_scene_log);
+            if (g_card_new)
+                g_card_new = false, g_primary_t = g_now;
+        }
+        for (const auto& l : lines)
+            log_add(l);
+    }
     {
         xr_string r;
         {
@@ -2022,9 +2222,9 @@ void before_render()
             g_glitch = std::max(g_glitch, clampr((hp_hit ? 0.35f : 0.22f) + drop * 6.f, 0.f, 1.f));
             g_hit = hp_hit ? 1.f : std::max(g_hit, 0.45f);
             if (hp_hit)
-                log_add(fmt("%s -%.1f%%", T("log_hit", "HULL DAMAGE"), drop * 100.f));
+                event(EV_HIT, nullptr, fmt("%s -%.1f%%", T("log_hit", "HULL DAMAGE"), drop * 100.f));
             else if (g_now - g_hit_t > 1.5f)
-                log_add(T("log_armor", "ARMOUR HIT"));
+                event(EV_HIT, nullptr, T("log_armor", "ARMOUR HIT"));
             if (g_active)
             {
                 ++g_hits;
@@ -2058,6 +2258,13 @@ void before_render()
                 if (g.alive && g.visible && !g.ghost && g.t_dead < 0.f && g.dist < C.card_range && g.threat > bt)
                     bt = g.threat, pr = id;
         }
+        {
+            // a scene's card that asks for it makes its man the card's target (alive and on the screen)
+            std::lock_guard<std::mutex> lk(g_scene_mx);
+            for (const auto& [id, sc] : g_scene_cards)
+                if (auto t = g_targets.find(id); sc.primary && t != g_targets.end() && t->second.alive && t->second.t_dead < 0.f)
+                    pr = id;
+        }
         if (pr != g_primary)
         {
             g_primary = pr;
@@ -2072,6 +2279,7 @@ void before_render()
     load_cfg();
     if (g_active || g_fade > 0.f)
     {
+        std::lock_guard<std::mutex> scene_lock(g_scene_mx); // (a scene's texts are read while drawing)
         for (const auto& [id, g] : g_targets)
         {
             draw_target(g, a);
@@ -2100,6 +2308,10 @@ void before_render()
             g_now = keep;
         }
         draw_flash(a, rn);
+        draw_plates(a);
+        g_log_text.clear();
+        for (const LogLine& l : g_log)
+            g_log_text += l.s + "\n";
     }
 
     V.on = true;
@@ -2204,6 +2416,173 @@ void api_skip(int a, int b)
 {
     g_skip0 = a;
     g_skip1 = b;
+}
+
+// a scene's text as the HUD can draw it: cp1251 (a script's own encoding; UTF-8 from elsewhere is turned into it), each
+// character the font has (tools\vision_font.py: cp1251's 32..255) - one it has not is left out and logged once
+xr_string scene_text(LPCSTR s)
+{
+    xr_string in = s ? s : "", out;
+    bool utf8 = false, valid = true;
+    for (size_t i = 0; i < in.size();)
+    {
+        const u8 c = u8(in[i]);
+        const int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+        if (!n || i + n > in.size())
+        {
+            valid = false;
+            break;
+        }
+        for (int k = 1; k < n; ++k)
+            if ((u8(in[i + k]) & 0xC0) != 0x80)
+                valid = false;
+        utf8 |= n > 1;
+        i += n;
+    }
+    if (utf8 && valid)
+    {
+        const int wn = MultiByteToWideChar(CP_UTF8, 0, in.c_str(), -1, nullptr, 0);
+        std::wstring w(wn, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, in.c_str(), -1, w.data(), wn);
+        const int an = WideCharToMultiByte(1251, 0, w.c_str(), -1, nullptr, 0, "\x98", nullptr);
+        xr_string a(an, '\0');
+        WideCharToMultiByte(1251, 0, w.c_str(), -1, a.data(), an, "\x98", nullptr);
+        in = a.c_str();
+    }
+    static bool told[256]{};
+    for (char ch : in)
+    {
+        const u8 c = u8(ch);
+        if (c >= 32 && c != 0x98 && c != 0x7F)
+            out += ch;
+        else if (c != '\n' && !told[c])
+        {
+            told[c] = true;
+            Msg("! E76 vision: a scene's text has a character the HUD's font has not (0x%02X): left out", c);
+        }
+    }
+    return out;
+}
+
+float scene_until(float secs) { return secs > 0.f ? real_now() + secs : 1e30f; }
+
+void api_card(int id, LPCSTR lines, float secs, LPCSTR threat, LPCSTR color, bool primary)
+{
+    SceneCard sc;
+    xr_string cur;
+    for (const char* p = lines ? lines : ""; ; ++p)
+    {
+        if (!*p || *p == '\n')
+        {
+            sc.lines.push_back(scene_text(cur.c_str()));
+            cur.clear();
+            if (!*p)
+                break;
+        }
+        else
+            cur += *p;
+    }
+    float v;
+    char tail;
+    if (threat && sscanf(threat, "%f%c", &v, &tail) == 1)
+        sc.threat_v = clampr(v, 0.f, 1.f), sc.threat = threat_word(sc.threat_v);
+    else
+        sc.threat = scene_text(threat);
+    const xr_string c = color ? color : "";
+    sc.col = c == "hot" ? 1 : c == "warm" ? 2 : c == "normal" ? 0 : -1;
+    sc.primary = primary;
+    sc.until = scene_until(secs);
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    g_scene_cards[u16(id)] = sc;
+    g_card_new = true;
+}
+
+void api_tag(int id, LPCSTR text, float secs)
+{
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    g_scene_tags[u16(id)] = {scene_text(text), scene_until(secs)};
+}
+
+void api_say(LPCSTR text, LPCSTR at, float secs, int obj, LPCSTR bone, float x, float y, float z)
+{
+    const xr_string where = at ? at : "log";
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    if (where == "log")
+    {
+        g_scene_log.push_back(scene_text(text));
+        return;
+    }
+    Plate p;
+    p.text = scene_text(text);
+    p.at = where == "world" ? 2 : where == "object" ? 3 : 1;
+    p.pos.set(x, y, z);
+    p.obj = u16(obj);
+    p.bone = bone ? bone : "";
+    p.t0 = real_now();
+    p.secs = secs > 0.f ? secs : 2.5f;
+    g_plates.push_back(p);
+}
+
+void api_status(LPCSTR text, float secs)
+{
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    g_status = scene_text(text);
+    g_status_until = text && *text ? scene_until(secs) : -1.f;
+}
+
+void api_stamp(int id, LPCSTR text)
+{
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    g_scene_stamps[u16(id)] = scene_text(text);
+}
+
+// a scene's overrides gone: one man's (his card, tag and stamp), or with -1 all of them, the plates and the status too
+void api_clear(int id)
+{
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    if (id >= 0)
+    {
+        g_scene_cards.erase(u16(id)), g_scene_tags.erase(u16(id)), g_scene_stamps.erase(u16(id));
+        return;
+    }
+    g_scene_cards.clear(), g_scene_tags.clear(), g_scene_stamps.clear(), g_plates.clear();
+    g_status_until = -1.f;
+}
+
+void api_hook(LPCSTR ev, bool on)
+{
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    for (int i = 0; i < EV_COUNT; ++i)
+        if (ev && !xr_strcmp(ev, EVN[i]))
+            g_hook[i] = on;
+}
+
+LPCSTR api_events()
+{
+    static xr_string s;
+    s.clear();
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    for (const auto& e : g_events)
+        s += e + "\n";
+    g_events.clear();
+    return s.c_str();
+}
+
+LPCSTR api_log_text()
+{
+    static xr_string s;
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    s = g_log_text;
+    return s.c_str();
+}
+
+LPCSTR api_scene()
+{
+    static string256 s;
+    std::lock_guard<std::mutex> lk(g_scene_mx);
+    xr_sprintf(s, "cards=%u tags=%u plates=%u status=%d stamps=%u", u32(g_scene_cards.size()), u32(g_scene_tags.size()), u32(g_plates.size()),
+               g_status_until > real_now() ? 1 : 0, u32(g_scene_stamps.size()));
+    return s;
 }
 
 void api_armor_rules(LPCSTR r)
@@ -2325,5 +2704,8 @@ void pm_vision_script_register(lua_State* L)
                        def("vision_active", &api_active), def("vision_targets", &api_targets), def("vision_targets_text", &api_targets_text), def("vision_info", &api_info), def("vision_tune", &api_tune),
                        def("vision_export", &api_export), def("vision_reload", &api_reload),
                        def("vision_armor_rules", &api_armor_rules), def("vision_mode", &api_mode), def("vision_set_mode", &api_set_mode), def("vision_sees", &api_sees),
-                       def("vision_modes", &api_modes), def("vision_skip", &api_skip)];
+                       def("vision_modes", &api_modes), def("vision_skip", &api_skip), def("vision_card", &api_card), def("vision_tag", &api_tag),
+                       def("vision_say", &api_say), def("vision_status", &api_status), def("vision_stamp", &api_stamp), def("vision_clear", &api_clear),
+                       def("vision_hook", &api_hook), def("vision_events", &api_events), def("vision_log_text", &api_log_text),
+                       def("vision_scene", &api_scene)];
 }
