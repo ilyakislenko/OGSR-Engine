@@ -1457,8 +1457,8 @@ LPCSTR threat_word(float th)
 u32 threat_col(float th) { return th >= 0.62f ? C.col_hot : th >= 0.38f ? C.col_warm : C.col; }
 
 // where the priority target's card goes: right of its brackets, left, above or below them - the place that covers the
-// fewest other targets' brackets and tags and stays on the screen; it keeps its place until another is clearly better
-// (no hopping from frame to frame as men move)
+// fewest other targets' brackets and tags, keeps off the screen's middle and stays on the screen; it keeps its place
+// until another is clearly better (no hopping from frame to frame as men move)
 int g_card_pick{-1};
 float g_card_for{-1.f};
 
@@ -1478,6 +1478,10 @@ void card_place(u16 self, float x0, float y0, float x1, float y1, float cw, floa
             const float tag = (o.ghost ? 210.f : (o.t_dead >= 0.f ? 150.f : 70.f)) * S; // its number and distance, or the stamp
             others.push_back({ox0 - 6.f * S, oy0 - 8.f * S, ox1 + 8.f * S + tag, oy1 + 14.f * S});
         }
+    // the screen's middle: the crosshair and the game's own range under it (HUDTarget's Graffiti19, centred at 0.525 of
+    // the height: "40.5" at 940..980, 570..592 in 1080p), a name line below it with hud_info - t18_tactic's compact card
+    // stood over them
+    const float mid[4] = {SW * 0.5f - 72.f * S, SH * 0.5f - 28.f * S, SW * 0.5f + 72.f * S, SH * 0.5f + 66.f * S};
     const float yt = y0 - 4.f * S, lo = 120.f * S, hi = SH - 160.f * S - ch;
     const float cand[6][2] = {
         {x1 + 26.f * S, yt}, {x0 - 26.f * S - cw, yt}, {x1 + 26.f * S, yt - ch - 10.f * S},
@@ -1491,6 +1495,7 @@ void card_place(u16 self, float x0, float y0, float x1, float y1, float cw, floa
         float s = float(i) * 40.f * S * S; // the order above wins a tie
         for (const auto& o : others)
             s += rect_overlap(r, o.data());
+        s += rect_overlap(r, mid) * 8.f;
         const float off = std::max(0.f, 70.f * S - cx) + std::max(0.f, cx + cw - (SW - 60.f * S)) + std::fabs(cy - cand[i][1]) * 0.5f;
         s += off * ch * 3.f; // off the screen (or pushed off its place) costs more than covering a tag
         score[i] = s;
