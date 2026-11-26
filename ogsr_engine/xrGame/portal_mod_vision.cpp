@@ -222,7 +222,8 @@ float g_actor_hp{-1.f};
 float g_suit_prev{-1.f}; // the outfit's condition a frame ago (an armoured hit wears the suit, not the health)
 int g_hits{}; // hits taken since it was switched on (the damage panel)
 float g_dmg{}; // health lost since then, 0..1
-bool g_rebooting{}; // E74's reboot under way: the vision steps aside
+bool g_rebooting{}; // E74's reboot under way (and its closing words after it): the vision steps aside
+float g_reboot_end{-100.f}; // real time the reboot ended
 float g_hit_t{-100.f}; // g_now of the last hit
 float g_suit0{-1.f}; // the outfit's condition when it was switched on
 float g_replay_t{-1.f};
@@ -1273,8 +1274,10 @@ void before_render()
         g_active = false;
     // E74's reboot owns the screen while it runs (its BIOS lines, its own red vision, its diagnostics): this layer steps
     // aside and the game's HUD is left as the reboot keeps it; the held zero health and the rise's are no damage; the
-    // vision boots again when he is up
-    const bool rebooting = portal_mod_reboot::active();
+    // vision boots again when he is up and E74's SYSTEM RESTORED, CONTINUING (2 s after, fading 0.5 s) has gone
+    if (portal_mod_reboot::active())
+        g_reboot_end = rn;
+    const bool rebooting = rn - g_reboot_end < 2.5f;
     if (rebooting != g_rebooting)
     {
         g_rebooting = rebooting;
