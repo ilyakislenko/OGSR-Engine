@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <mutex>
+#include <atomic>
 #include "portal_mod_vision.h"
 #include "../xr_3da/portal_mod_vision_shared.h"
 #include "portal_mod_replay.h"
@@ -39,6 +40,7 @@
 #include "script_engine.h"
 #include "ai_space.h"
 #include "../xr_3da/XR_IOConsole.h"
+#include "../xr_3da/xr_input.h"
 #include "../xrcdb/xr_collide_defs.h"
 #include "../xr_3da/GameMtlLib.h"
 #include "../Include/xrRender/Kinematics.h"
@@ -95,6 +97,46 @@ struct SpeciesThreat
 };
 xr_vector<SpeciesThreat> g_species_threat; // [pm_vision_threat_species]: section substring -> threat (armour on, off), reason
 xr_map<xr_string, xr_string> g_ammo_name; // [pm_vision_ammo]: an ammo's or a grenade's section -> its name on the card
+
+// The modes (the user: "several keys - a plain mode that just highlights enemies, a through-walls mode... so it isn't
+// one big jumble all the time hurting the eyes"). J switches the vision on and off in the last mode, Shift+J steps to the
+// next; each mode's look and parts come from [pm_vision_mode_<id>] (pm_vision.ltx), tuned there with no rebuild.
+//   tactic    play: thin brackets on enemies in sight coloured by threat, their distance, a compact card for the one
+//             under the crosshair; a faint red, nothing else
+//   analysis  the whole HUD as filmed (the AE comp's): the grade, scan lines, cards, log, damage panel, streams
+//   walls     living things within walls_range through walls too (their silhouettes in heat, a dashed box): the one
+//             mode that is not honest - the user asked for it
+//   heat      the world dimmed, bodies glowing (the honest heat), no text
+struct Grade
+{
+    float tint{}, scan{}, grain{}, ca{}, vignette{}, glow{}, heat{}, dim{}, walls{};
+};
+struct Mode
+{
+    xr_string id, name;
+    Grade g;
+    float glitch{1.f}, hit{1.f}, walls_range{60.f};
+    bool full{true}; // the whole HUD (analysis); else the light one below
+    int brackets{2}; // light: 0 none, 1 enemies (and the one under the crosshair), 2 all
+    bool tags{true}; // light: the distance by the brackets
+    int card{1}; // light: 0 none, 1 compact (threat, reason, name, weapon)
+    bool card_aim{true}; // light: the card only for the one under the crosshair, else the biggest threat
+    bool reticle{}, chrome{}, streams{}, telemetry{}, log{}, damage{}, boot{};
+    bool hide_hud{}, hide_cross{}, aim_mark{}, dual_skip{true};
+};
+enum
+{
+    M_TACTIC,
+    M_ANALYSIS,
+    M_WALLS,
+    M_HEAT,
+    M_COUNT
+};
+Mode g_modes[M_COUNT];
+xr_vector<int> g_cycle; // Shift+J's order ([pm_vision] modes)
+int g_mode{M_TACTIC};
+bool g_mode_init{};
+int g_mode_key{-1}; // [pm_vision] mode_key: a key of its own for the next mode (none by default)
 const void* g_cfg_level{};
 
 LPCSTR T(LPCSTR id, LPCSTR def)
@@ -118,6 +160,102 @@ xr_string unquote(LPCSTR s)
     if (v.size() >= 2 && v.front() == '"' && v.back() == '"')
         v = v.substr(1, v.size() - 2);
     return v;
+}
+
+xr_vector<xr_string> split_list(LPCSTR s);
+
+const LPCSTR MODE_IDS[M_COUNT] = {"tactic", "analysis", "walls", "heat"}; // (known before pm_vision.ltx is read)
+int mode_index(LPCSTR id)
+{
+    for (int i = 0; i < M_COUNT; ++i)
+        if (id && !xr_strcmp(MODE_IDS[i], id))
+            return i;
+    return -1;
+}
+
+// the modes' defaults (analysis: [pm_vision]'s own look, as it always was), then [pm_vision_mode_<id>] over them
+void modes_load(CInifile& ini)
+{
+    const portal_mod_vision_frame& V = portal_mod_vision;
+    Mode& t = g_modes[M_TACTIC];
+    t = Mode{};
+    t.id = "tactic", t.name = "TACTICS";
+    t.g = {0.12f, 0.f, 0.f, 0.f, 0.08f, 0.8f, 0.f, 0.f, 0.f};
+    t.glitch = 0.f, t.hit = 0.25f;
+    t.full = false, t.brackets = 1, t.card = 1, t.card_aim = true;
+    Mode& an = g_modes[M_ANALYSIS];
+    an = Mode{};
+    an.id = "analysis", an.name = "ANALYSIS";
+    an.g = {V.tint, V.scan, V.grain, V.ca, V.vignette, V.glow, V.heat, 0.f, 0.f};
+    an.full = true, an.card_aim = false;
+    an.reticle = an.chrome = an.streams = an.telemetry = an.log = an.damage = an.boot = true;
+    an.hide_hud = C.hide_hud, an.hide_cross = C.hide_cross, an.aim_mark = C.aim_mark, an.dual_skip = false;
+    Mode& w = g_modes[M_WALLS];
+    w = Mode{};
+    w.id = "walls", w.name = "THROUGH WALLS";
+    w.g = {0.30f, 0.04f, 0.03f, 0.3f, 0.2f, 1.0f, 0.55f, 0.f, 1.f};
+    w.glitch = 0.15f, w.hit = 0.4f, w.walls_range = 60.f;
+    w.full = false, w.brackets = 1, w.card = 1, w.card_aim = true;
+    Mode& h = g_modes[M_HEAT];
+    h = Mode{};
+    h.id = "heat", h.name = "HEAT";
+    h.g = {0.45f, 0.08f, 0.05f, 0.4f, 0.3f, 1.0f, 1.f, 0.72f, 0.f};
+    h.glitch = 0.2f, h.hit = 0.5f;
+    h.full = false, h.brackets = 0, h.tags = false, h.card = 0;
+    for (Mode& m : g_modes)
+    {
+        const xr_string sec = "pm_vision_mode_" + m.id;
+        if (!ini.section_exist(sec.c_str()))
+            continue;
+        const LPCSTR s = sec.c_str();
+        auto rf = [&](LPCSTR k, float& v) {
+            if (ini.line_exist(s, k))
+                v = ini.r_float(s, k);
+        };
+        auto rb = [&](LPCSTR k, bool& v) {
+            if (ini.line_exist(s, k))
+                v = !!ini.r_bool(s, k);
+        };
+        if (ini.line_exist(s, "name"))
+            m.name = unquote(ini.r_string(s, "name"));
+        rf("tint", m.g.tint), rf("scan_lines", m.g.scan), rf("grain", m.g.grain), rf("aberration", m.g.ca), rf("vignette", m.g.vignette);
+        rf("glow", m.g.glow), rf("heat", m.g.heat), rf("dim", m.g.dim), rf("walls", m.g.walls), rf("walls_range", m.walls_range);
+        rf("glitch", m.glitch), rf("hit", m.hit);
+        if (ini.line_exist(s, "hud"))
+        {
+            const xr_string v = ini.r_string(s, "hud");
+            m.full = v == "full";
+            if (v == "none")
+                m.brackets = 0, m.tags = false, m.card = 0;
+        }
+        if (ini.line_exist(s, "brackets"))
+        {
+            const xr_string v = ini.r_string(s, "brackets");
+            m.brackets = v == "none" ? 0 : v == "all" ? 2 : 1;
+        }
+        if (ini.line_exist(s, "card"))
+            m.card = xr_strcmp(ini.r_string(s, "card"), "none") ? 1 : 0;
+        if (ini.line_exist(s, "card_on"))
+            m.card_aim = !xr_strcmp(ini.r_string(s, "card_on"), "aim");
+        rb("tags", m.tags), rb("lock_reticle", m.reticle), rb("chrome", m.chrome), rb("streams", m.streams), rb("telemetry", m.telemetry);
+        rb("log", m.log), rb("damage_panel", m.damage), rb("boot", m.boot), rb("hide_game_hud", m.hide_hud), rb("hide_crosshair", m.hide_cross);
+        rb("aim_mark", m.aim_mark), rb("one_set_with_dual", m.dual_skip);
+    }
+    g_cycle.clear();
+    constexpr LPCSTR S = "pm_vision";
+    if (ini.line_exist(S, "modes"))
+        for (const auto& id : split_list(ini.r_string(S, "modes")))
+            if (const int i = mode_index(id.c_str()); i >= 0)
+                g_cycle.push_back(i);
+    if (g_cycle.empty())
+        g_cycle = {M_TACTIC, M_ANALYSIS, M_WALLS, M_HEAT};
+    g_mode_key = ini.line_exist(S, "mode_key") ? keyname_to_dik(ini.r_string(S, "mode_key")) : -1;
+    if (!g_mode_init) // the first level only: J keeps the last mode after that
+    {
+        g_mode_init = true;
+        const int i = ini.line_exist(S, "mode") ? mode_index(ini.r_string(S, "mode")) : -1;
+        g_mode = i >= 0 ? i : M_TACTIC;
+    }
 }
 
 void load_cfg()
@@ -165,6 +303,7 @@ void load_cfg()
             C.hide_cross = !!READ_IF_EXISTS(pi, r_bool, S, "hide_crosshair", C.hide_cross);
             C.aim_mark = !!READ_IF_EXISTS(pi, r_bool, S, "aim_mark", C.aim_mark);
         }
+        modes_load(ini);
         g_text.clear();
         if (ini.section_exist("pm_vision_text"))
             for (const auto& it : ini.r_section("pm_vision_text").Data)
@@ -234,7 +373,7 @@ void load_cfg()
     }
     else
         Msg("! E76 vision: config\\portal_mod\\pm_vision_font.ltx not found (tools/vision_font.py): no text");
-    Msg("* E76 vision: config loaded, key %d, range %.0f m", C.key, C.range);
+    Msg("* E76 vision: config loaded, key %d, range %.0f m, mode %s", C.key, C.range, g_modes[g_mode].id.c_str());
 }
 
 //------------------------------------------------------------------------------------------------------------------
@@ -261,6 +400,10 @@ float g_replay_t{-1.f};
 u32 g_frame{};
 int g_next_num{1};
 u32 g_export{}; // 0 normal, 1 the HUD alone, 2 the picture without the HUD
+float g_mode_t{-100.f}; // real time of the last mode switch: its name shows for a moment
+Grade g_grade; // the look now, eased toward the mode's (a switch blends in ~0.3 s)
+float g_shift_t{-100.f}; // real time of a Shift press that the keyboard's own state does not show (a script's, the lab's)
+std::atomic<int> g_skip0{-1}, g_skip1{-1}; // E70's two targets while two guns are out (pm_vision.update): its brackets are theirs
 
 struct Target
 {
@@ -514,7 +657,7 @@ bool ray_clear(const Fvector& from, const Fvector& to)
     if (dist < 0.4f)
         return true;
     d.div(dist);
-    static collide::rq_results hits; // (the render's thread only)
+    thread_local collide::rq_results hits; // (the render's thread, and Lua's through level.vision_sees)
     float vis = 1.f;
     const collide::ray_defs rd(from, d, dist - 0.35f, CDB::OPT_CULL, collide::rqtStatic);
     Level().ObjectSpace.RayQuery(hits, rd, see_through, &vis, nullptr, nullptr);
@@ -1005,6 +1148,17 @@ void update_targets(float dt)
     gather(cands);
     const Fvector& cam = Device.vCameraPosition;
     ++g_frame;
+    // the walls mode: the living within its range are drawn through walls (their silhouettes, by their own geometry,
+    // into the heat buffer's blue with no depth test) and kept as targets out of sight
+    const Mode& M = g_modes[g_mode];
+    const bool xray = M.g.walls > 0.f;
+    if (xray)
+        for (const Cand& c : cands)
+        {
+            const float dist = c.xf.c.distance_to(cam);
+            if (c.alive && c.R && dist < M.walls_range)
+                portal_mod_vision.wall_bodies.push_back({c.R, clampr(1.f - dist / M.walls_range, 0.15f, 1.f)});
+        }
     for (const Cand& c : cands)
     {
         auto it = g_targets.find(c.id);
@@ -1015,7 +1169,8 @@ void update_targets(float dt)
         if (!screen_box(c, g, head, chest, pelvis))
             continue;
         const bool vis = ray_clear(cam, head) || ray_clear(cam, chest) || ray_clear(cam, pelvis);
-        if (!vis && (fresh || g_now - g.t_seen > 0.3f))
+        const bool behind = xray && c.alive && head.distance_to(cam) < M.walls_range; // (the walls mode only)
+        if (!vis && (fresh || g_now - g.t_seen > 0.3f) && !behind)
             continue; // not in sight (honest: no wallhack)
         if (fresh)
         {
@@ -1218,8 +1373,65 @@ void card_place(u16 self, float x0, float y0, float x1, float y1, float cw, floa
     ty = clampr(cand[g_card_pick][1], lo, std::max(lo, hi));
 }
 
+// the light modes' target: thin brackets (enemies, and the one under the crosshair) bright for a high threat and dim for
+// a low one, dashed for one out of sight (walls) or invisible; its distance; the compact card for the one under the
+// crosshair. No brackets of ours on E70's two targets while two guns are out: its own are there.
+void draw_lite(const Target& g, float a, const Mode& M)
+{
+    const float x0 = g.box[0] + g.off[0], y0 = g.box[1] + g.off[1], x1 = g.box[2] + g.off[2], y1 = g.box[3] + g.off[3];
+    const bool primary = g.id == g_primary;
+    if (g.t_dead >= 0.f)
+    {
+        const float q = (g_now - g.t_dead) / 0.5f;
+        if (q <= 1.f && M.brackets > 0)
+            brackets(x0, y0, x1, y1, std::min(12.f * S, (x1 - x0) * 0.3f), 1.5f * S, rgba(C.col, a * 0.6f * (1.f - q)));
+        return;
+    }
+    const bool shown = M.brackets == 2 || (M.brackets == 1 && (g.hostile || primary));
+    const bool e70 = M.dual_skip && (int(g.id) == g_skip0.load() || int(g.id) == g_skip1.load());
+    if (shown && !e70)
+    {
+        const float k = clampr((g.threat - 0.03f) / 0.6f, 0.f, 1.f);
+        float al = a * (0.38f + 0.57f * k) * (g.visible ? 1.f : 0.6f);
+        if (primary)
+            al = std::max(al, a * 0.9f);
+        const u32 c = rgba(g.ghost ? C.col_heat : threat_col(g.threat), al);
+        if (g.ghost || !g.visible)
+            dashed_box(x0, y0, x1, y1, 1.5f * S, c);
+        else
+            brackets(x0, y0, x1, y1, std::min(12.f * S, (x1 - x0) * 0.3f), (primary ? 2.f : 1.5f) * S, c);
+        if (M.tags && !(primary && M.card && !g.ghost)) // (the card's man: his distance is on the card's first line)
+            text(x1 + 6.f * S, y0 - 2.f * S, fmt("%.0f %s", g.dist, T("m", "M")).c_str(), F_SM, rgba(C.col, al * 0.85f));
+    }
+    if (!primary || M.card == 0 || g.ghost)
+        return;
+    xr_vector<xr_string> lines;
+    lines.push_back(fmt("%s: %s \xB7 %.0f %s", T("threat", "THREAT"), threat_word(g.threat), g.dist, T("m", "M")));
+    if (g.why.size())
+        lines.push_back(g.why);
+    lines.push_back(g.name);
+    if (!g.monster && g.weapon.size())
+        lines.push_back(g.weapon);
+    const float lh = 19.f * S;
+    float cw = 0.f;
+    for (const auto& s : lines)
+        cw = std::max(cw, text_w(s.c_str(), F_SM));
+    float tx, ty;
+    card_place(g.id, x0, y0, x1, y1, cw, lh * float(lines.size()), tx, ty);
+    for (size_t i = 0; i < lines.size(); ++i)
+    {
+        const u32 col = i == 0 ? rgba(threat_col(g.threat), a * 0.95f) : rgba(C.col, a * (i == 1 ? 0.8f : 0.7f));
+        typed(tx, ty + float(i) * lh, lines[i].c_str(), F_SM, col, g_primary_t + 0.05f + float(i) * 0.07f, 90.f);
+    }
+}
+
 void draw_target(const Target& g, float a)
 {
+    if (const Mode& M = g_modes[g_mode]; !M.full)
+    {
+        draw_lite(g, a, M);
+        return;
+    }
     const float x0 = g.box[0] + g.off[0], y0 = g.box[1] + g.off[1], x1 = g.box[2] + g.off[2], y1 = g.box[3] + g.off[3];
     const bool primary = g.id == g_primary;
     const bool locked = g.id == g_lock;
@@ -1329,7 +1541,7 @@ void draw_target(const Target& g, float a)
 
 void draw_lock(float a)
 {
-    if (g_lock == u16(-1))
+    if (g_lock == u16(-1) || !g_modes[g_mode].reticle)
         return;
     auto it = g_targets.find(g_lock);
     if (it == g_targets.end() || !it->second.head_ok || it->second.t_dead >= 0.f)
@@ -1344,7 +1556,38 @@ void draw_lock(float a)
              rgba(C.col_hot, a * ((int(g_now / 0.06f) % 2 == 0) ? 1.f : 0.4f)), 1);
 }
 
+void draw_frame(float a);
+void draw_streams(float a);
+void draw_telemetry(float a);
+void draw_damage(float a);
+void draw_log(float a);
+
 void draw_chrome(float a)
+{
+    const Mode& M = g_modes[g_mode];
+    // its own aim mark while the game's crosshair is put away: four short ticks round the middle, faint (not in a
+    // replay, where the middle is a camera's, nor in the export's layer)
+    if (M.hide_cross && M.aim_mark && !pm_replay::lua_active() && g_export == 0)
+    {
+        const float cx = std::floor(SW * 0.5f) + 0.5f, cy = std::floor(SH * 0.5f) + 0.5f, g0 = 7.f * S, g1 = 15.f * S, w = 1.5f * S;
+        const u32 ac = rgba(C.col, a * 0.8f);
+        hline(cx - g1, cx - g0, cy, w, ac), hline(cx + g0, cx + g1, cy, w, ac);
+        vline(cx, cy - g1, cy - g0, w, ac), vline(cx, cy + g0, cy + g1, w, ac);
+    }
+    if (M.chrome)
+        draw_frame(a);
+    if (M.streams)
+        draw_streams(a);
+    if (M.telemetry)
+        draw_telemetry(a);
+    if (M.damage)
+        draw_damage(a);
+    if (M.log)
+        draw_log(a);
+}
+
+// the frame's corners, the mode and status lines, the compass
+void draw_frame(float a)
 {
     // the frame's corners
     const float m = 34.f * S, L = 70.f * S;
@@ -1354,16 +1597,6 @@ void draw_chrome(float a)
     hline(SW - m - L, SW - m, m, bw, cc), vline(SW - m, m, m + L, bw, cc);
     hline(m, m + L, SH - m, bw, cc), vline(m, SH - m - L, SH - m, bw, cc);
     hline(SW - m - L, SW - m, SH - m, bw, cc), vline(SW - m, SH - m - L, SH - m, bw, cc);
-
-    // its own aim mark while the game's crosshair is put away: four short ticks round the middle, faint (not in a
-    // replay, where the middle is a camera's, nor in the export's layer)
-    if (C.hide_cross && C.aim_mark && !pm_replay::lua_active() && g_export == 0)
-    {
-        const float cx = std::floor(SW * 0.5f) + 0.5f, cy = std::floor(SH * 0.5f) + 0.5f, g0 = 7.f * S, g1 = 15.f * S, w = 1.5f * S;
-        const u32 ac = rgba(C.col, a * 0.8f);
-        hline(cx - g1, cx - g0, cy, w, ac), hline(cx + g0, cx + g1, cy, w, ac);
-        vline(cx, cy - g1, cy - g0, w, ac), vline(cx, cy + g0, cy + g1, w, ac);
-    }
 
     // the mode and the status line
     int hostile = 0, total = 0;
@@ -1390,7 +1623,6 @@ void draw_chrome(float a)
     float yaw = rad2deg(std::atan2(dir.x, dir.z));
     if (yaw < 0.f)
         yaw += 360.f;
-    const float pitch = rad2deg(std::asin(clampr(dir.y, -1.f, 1.f)));
     const float tcx = SW * 0.5f, ty = 44.f * S, span = 40.f, ppd = 9.f * S;
     for (int dg = int(std::floor(yaw - span)) - 1; dg <= int(std::ceil(yaw + span)) + 1; ++dg)
     {
@@ -1411,7 +1643,11 @@ void draw_chrome(float a)
     }
     seg(tcx - 6.f * S, ty - 9.f * S, tcx, ty - 2.f * S, 2.f * S, rgba(C.col, a * 0.9f));
     seg(tcx + 6.f * S, ty - 9.f * S, tcx, ty - 2.f * S, 2.f * S, rgba(C.col, a * 0.9f));
+}
 
+// the hex stream right and the data column left (the AE comp's)
+void draw_streams(float a)
+{
     // the hex stream, right (the AE comp's)
     if (g_hex.empty())
     {
@@ -1446,16 +1682,27 @@ void draw_chrome(float a)
             rect(x, y, x + 4.f * S, y + rh - 2.f * S, rgba(C.col, a * 0.22f * edge));
         }
     }
+}
 
-    // the telemetry, bottom right
+// the telemetry, bottom right
+void draw_telemetry(float a)
+{
+    Fvector dir = Device.vCameraDirection;
+    float yaw = rad2deg(std::atan2(dir.x, dir.z));
+    if (yaw < 0.f)
+        yaw += 360.f;
+    const float pitch = rad2deg(std::asin(clampr(dir.y, -1.f, 1.f)));
     const Fvector& cp = Device.vCameraPosition;
     const float rx = SW - 110.f * S;
     text(rx, SH - 150.f * S, fmt("%s %03.0f   %s %+03.0f", T("azimuth", "AZ"), yaw, T("pitch", "EL"), pitch).c_str(), F_SM, rgba(C.col, a * 0.7f), 2);
     text(rx, SH - 130.f * S, fmt("X %7.1f  Y %6.1f  Z %7.1f", cp.x, cp.y, cp.z).c_str(), F_SM, rgba(C.col, a * 0.6f), 2);
     const float tt = std::max(0.f, g_now);
     text(rx, SH - 110.f * S, fmt("T+ %02d:%02d.%d", int(tt / 60.f) % 100, int(tt) % 60, int(tt * 10.f) % 10).c_str(), F_SM, rgba(C.col, a * 0.6f), 2);
+}
 
-    // the damage panel, bottom left (the AE comp's): shown from the first hit, for 8 s after the last one
+// the damage panel, bottom left (the AE comp's): shown from the first hit, for 8 s after the last one
+void draw_damage(float a)
+{
     const float since = g_now - g_hit_t;
     if (g_hits > 0 && since < 8.f)
     {
@@ -1482,8 +1729,11 @@ void draw_chrome(float a)
         text(tx + 16.f * S, tyy, sev, F_TAG, rgba(C.col, pa));
         text(420.f * S, 911.f * S, g_dmg < 0.05f ? T("dmg_note_minor", "PAINT SCRATCHES") : T("dmg_note", "ARMOUR BREACHED"), F_SM, rgba(C.col, pa * 0.7f));
     }
+}
 
-    // the event log, bottom left (above the damage panel)
+// the event log, bottom left (above the damage panel)
+void draw_log(float a)
+{
     float ly = 790.f * S - float(g_log.size()) * 20.f * S;
     for (const LogLine& l : g_log)
     {
@@ -1506,6 +1756,45 @@ void draw_boot(float t)
     static const LPCSTR defs[3] = {"OPTICS ........ OK", "THERMAL ....... OK", "TARGETING ..... OK"};
     for (int i = 0; i < 3; ++i)
         typed(110.f * S, 215.f * S + float(i) * 26.f * S, T(ids[i], defs[i]), F_LBL, rgba(C.col, a * 0.85f), 0.8f + float(i) * 0.35f, 60.f);
+}
+
+float real_now();
+
+// a mode's name for a moment after each switch, typed at the top (the real clock: a paused replay too)
+void draw_flash(float a, float rn)
+{
+    const float t = rn - g_mode_t;
+    if (t < 0.f || t > 1.8f)
+        return;
+    const float fa = a * clampr((1.8f - t) / 0.3f, 0.f, 1.f);
+    const xr_string s = fmt("%s: %s", T("mode_title", "VISION"), g_modes[g_mode].name.c_str());
+    const float w = text_w(s.c_str(), F_LBL);
+    const float keep = g_now;
+    g_now = t;
+    typed(SW * 0.5f - w * 0.5f, 104.f * S, s.c_str(), F_LBL, rgba(C.col, fa), 0.f, 70.f);
+    g_now = keep;
+    const float e = ease(t / 0.25f) * (w * 0.5f + 14.f * S);
+    hline(SW * 0.5f - e, SW * 0.5f + e, 136.f * S, 1.f * S, rgba(C.col, fa * 0.55f));
+}
+
+void set_mode(int i)
+{
+    if (i < 0 || i >= M_COUNT)
+        return;
+    if (i != g_mode)
+        Msg("* E76 vision mode %s", MODE_IDS[i]);
+    g_mode = i;
+    g_mode_t = real_now();
+    if (g_modes[i].glitch > 0.f)
+        g_glitch = std::max(g_glitch, 0.3f);
+}
+
+void next_mode()
+{
+    if (g_cycle.empty())
+        return;
+    auto it = std::find(g_cycle.begin(), g_cycle.end(), g_mode);
+    set_mode(it == g_cycle.end() || it + 1 == g_cycle.end() ? g_cycle.front() : *(it + 1));
 }
 
 void reset_targets()
@@ -1545,49 +1834,52 @@ void load_switch()
 // The game's own HUD is not the robot's: while the vision is up its minimap, bars, news and crosshair are put away
 // (as in the AE takes, shot with no HUD), and what was shown comes back when it goes down. A script that shows the
 // indicators again meanwhile is overruled until then.
+// (by the mode: the light ones leave the game's HUD and crosshair as they are)
 CUI* g_hud_ui{};
-bool g_hud_hidden{}, g_hud_had_ind{}, g_hud_had_cross{};
+bool g_hud_had_ind{}, g_hud_had_cross{};
 void sync_game_hud()
 {
     CUI* ui = g_pGameLevel ? HUD().GetUI() : nullptr;
     if (ui != g_hud_ui)
     {
         g_hud_ui = ui; // a new level or a load: nothing of ours is hidden there
-        g_hud_hidden = false;
+        g_hud_had_ind = g_hud_had_cross = false;
     }
     if (!ui)
         return;
-    const bool want = g_active && g_switch && (C.hide_hud || C.hide_cross);
-    if (want)
+    const Mode& M = g_modes[g_mode];
+    const bool on = g_active && g_switch;
+    if (on && M.hide_hud)
     {
-        if (!g_hud_hidden)
-        {
-            g_hud_had_ind = false;
-            g_hud_had_cross = false;
-            g_hud_hidden = true;
-        }
-        if (C.hide_hud && ui->GameIndicatorsShown())
+        if (ui->GameIndicatorsShown())
         {
             ui->HideGameIndicators();
             ui->hud_disabled_by_user = true; // the news too
             g_hud_had_ind = true;
         }
-        if (C.hide_cross && ui->CrosshairShown())
+    }
+    else if (g_hud_had_ind)
+    {
+        if (!ui->GameIndicatorsShown())
+        {
+            ui->ShowGameIndicators();
+            ui->hud_disabled_by_user = false;
+        }
+        g_hud_had_ind = false;
+    }
+    if (on && M.hide_cross)
+    {
+        if (ui->CrosshairShown())
         {
             ui->HideCrosshair();
             g_hud_had_cross = true;
         }
     }
-    else if (g_hud_hidden)
+    else if (g_hud_had_cross)
     {
-        if (g_hud_had_ind && !ui->GameIndicatorsShown())
-        {
-            ui->ShowGameIndicators();
-            ui->hud_disabled_by_user = false;
-        }
-        if (g_hud_had_cross && !ui->CrosshairShown())
+        if (!ui->CrosshairShown())
             ui->ShowCrosshair();
-        g_hud_hidden = false;
+        g_hud_had_cross = false;
     }
 }
 
@@ -1606,6 +1898,9 @@ void set_active(bool on)
     if (on)
     {
         load_cfg();
+        g_grade = g_modes[g_mode].g;
+        if (!g_modes[g_mode].boot)
+            g_mode_t = real_now();
         g_boot = 0.f;
         g_glitch = 1.f;
         g_now = 0.f;
@@ -1633,6 +1928,7 @@ void before_render()
     portal_mod_vision_frame& V = portal_mod_vision;
     V.verts.clear();
     V.ghosts.clear();
+    V.wall_bodies.clear();
     load_switch();
     const float rn = real_now();
     float rdt = g_real_prev > 0.f ? rn - g_real_prev : 0.f;
@@ -1752,9 +2048,10 @@ void before_render()
     {
         update_targets(dt);
         update_lock();
-        // the priority: the locked one, else the biggest threat in sight
+        // the priority: the locked one (or the one under the crosshair), else the biggest threat in sight - the light
+        // modes card only the one under the crosshair
         u16 pr = g_lock;
-        if (pr == u16(-1))
+        if (pr == u16(-1) && (g_modes[g_mode].full || !g_modes[g_mode].card_aim))
         {
             float bt = -1.f;
             for (const auto& [id, g] : g_targets)
@@ -1794,6 +2091,7 @@ void before_render()
         }
         draw_lock(a);
         draw_chrome(a);
+        if (g_modes[g_mode].boot)
         {
             // the boot lines run on the real clock: typed() reads g_now, so it is swapped for them
             const float keep = g_now;
@@ -1801,6 +2099,7 @@ void before_render()
             draw_boot(g_boot);
             g_now = keep;
         }
+        draw_flash(a, rn);
     }
 
     V.on = true;
@@ -1809,21 +2108,52 @@ void before_render()
     V.seed = g_seed;
     V.time = g_now;
     V.hit = g_hit;
+    {
+        // the mode's look, eased (a switch blends over ~0.3 s)
+        const Mode& M = g_modes[g_mode];
+        const float k = std::min(1.f, rdt / 0.1f);
+        float* cur = &g_grade.tint;
+        const float* want = &M.g.tint;
+        for (int i = 0; i < int(sizeof(Grade) / sizeof(float)); ++i)
+            cur[i] += (want[i] - cur[i]) * k;
+        V.tint = g_grade.tint, V.scan = g_grade.scan, V.grain = g_grade.grain, V.ca = g_grade.ca, V.vignette = g_grade.vignette;
+        V.glow = g_grade.glow, V.heat = g_grade.heat, V.dim = g_grade.dim, V.walls = g_grade.walls;
+        V.glitch = g_glitch * M.glitch;
+        V.hit = g_hit * M.hit;
+    }
     V.hud_only = g_export == 1 ? 1 : 0;
     V.no_hud = g_export == 2 ? 1 : 0;
 }
 
+// J: on / off in the last mode; Shift+J (or [pm_vision] mode_key): the next mode, switching it on if it is off. A Shift
+// pressed by a script (the lab's, a scene's: level.send_event_key_press) is not in the keyboard's state - its press is
+// remembered for a second instead
 bool key_press(int dik)
 {
     if (!g_switch || !g_pGameLevel)
         return false;
     load_cfg();
-    if (dik != C.key)
+    if (dik == DIK_LSHIFT || dik == DIK_RSHIFT)
+    {
+        if (!pInput || !pInput->iGetAsyncKeyState(dik))
+            g_shift_t = real_now();
+        return false;
+    }
+    if (dik != C.key && dik != g_mode_key)
         return false;
     if (Console && Console->bVisible)
         return false;
     if (!pm_replay::lua_active() && (Device.Paused() || (HUD().GetUI() && HUD().GetUI()->MainInputReceiver())))
         return false;
+    const bool shift = (pInput && (pInput->iGetAsyncKeyState(DIK_LSHIFT) || pInput->iGetAsyncKeyState(DIK_RSHIFT))) || real_now() - g_shift_t < 1.f;
+    g_shift_t = -100.f;
+    if (dik == g_mode_key || shift)
+    {
+        next_mode();
+        if (!g_active)
+            set_active(true);
+        return true;
+    }
     set_active(!g_active);
     return true;
 }
@@ -1847,6 +2177,35 @@ void api_toggle() { set_active(!g_active); }
 bool api_active() { return g_active; }
 void api_export(int mode) { g_export = u32(clampr(mode, 0, 2)); }
 // (from Lua's thread: kept for the render's thread, which reads the rules, to parse - no vector changed under its feet)
+LPCSTR api_mode() { return MODE_IDS[g_mode]; }
+bool api_set_mode(LPCSTR id)
+{
+    const int i = mode_index(id);
+    if (i < 0)
+    {
+        Msg("! E76 vision_set_mode: no mode %s", id ? id : "nil");
+        return false;
+    }
+    g_mode_init = true; // (a scene's mode before the level's first frame: pm_vision.ltx's mode does not override it)
+    set_mode(i);
+    return true;
+}
+// the vision's own sight line (through what the AI sees through: Cordon's invisible walls, foliage) - for a lab's spots
+bool api_sees(const Fvector& a, const Fvector& b) { return ray_clear(a, b); }
+LPCSTR api_modes()
+{
+    static xr_string s;
+    s.clear();
+    for (int i : g_cycle)
+        s += xr_string(s.size() ? "," : "") + MODE_IDS[i];
+    return s.c_str();
+}
+void api_skip(int a, int b)
+{
+    g_skip0 = a;
+    g_skip1 = b;
+}
+
 void api_armor_rules(LPCSTR r)
 {
     std::lock_guard<std::mutex> lk(g_armor_mx);
@@ -1914,29 +2273,35 @@ LPCSTR api_info()
     int vis = 0, ghosts = 0;
     for (const auto& [id, g] : g_targets)
         vis += g.visible ? 1 : 0, ghosts += g.ghost ? 1 : 0;
-    xr_sprintf(s, "switch=%d on=%d fade=%.2f targets=%u visible=%d ghosts=%d lock=%d locked=%d primary=%d glitch=%.2f verts=%u export=%u",
+    xr_sprintf(s, "switch=%d on=%d fade=%.2f targets=%u visible=%d ghosts=%d lock=%d locked=%d primary=%d glitch=%.2f verts=%u export=%u mode=%s walls=%u",
                g_switch ? 1 : 0, g_active ? 1 : 0, g_fade, u32(g_targets.size()), vis, ghosts, g_lock == u16(-1) ? -1 : int(g_lock), g_locked ? 1 : 0,
-               g_primary == u16(-1) ? -1 : int(g_primary), g_glitch, u32(portal_mod_vision.verts.size()), g_export);
+               g_primary == u16(-1) ? -1 : int(g_primary), g_glitch, u32(portal_mod_vision.verts.size()), g_export, g_modes[g_mode].id.c_str(),
+               u32(portal_mod_vision.wall_bodies.size()));
     return s;
 }
 
+// (the mode's look now: back to the ltx's on vision_reload)
 void api_tune(LPCSTR name, float v)
 {
-    portal_mod_vision_frame& V = portal_mod_vision;
+    Grade& G = g_modes[g_mode].g;
     if (!xr_strcmp(name, "heat"))
-        V.heat = v;
+        G.heat = v;
     else if (!xr_strcmp(name, "scan_lines"))
-        V.scan = v;
+        G.scan = v;
     else if (!xr_strcmp(name, "grain"))
-        V.grain = v;
+        G.grain = v;
     else if (!xr_strcmp(name, "aberration"))
-        V.ca = v;
+        G.ca = v;
     else if (!xr_strcmp(name, "vignette"))
-        V.vignette = v;
+        G.vignette = v;
     else if (!xr_strcmp(name, "glow"))
-        V.glow = v;
+        G.glow = v;
     else if (!xr_strcmp(name, "tint"))
-        V.tint = v;
+        G.tint = v;
+    else if (!xr_strcmp(name, "dim"))
+        G.dim = v;
+    else if (!xr_strcmp(name, "walls"))
+        G.walls = v;
     else if (!xr_strcmp(name, "range"))
         C.range = v;
     else if (!xr_strcmp(name, "glitch"))
@@ -1959,5 +2324,6 @@ void pm_vision_script_register(lua_State* L)
     module(L, "level")[def("vision_switch", &api_switch), def("vision_switched", &api_switched), def("vision_on", &api_on), def("vision_toggle", &api_toggle),
                        def("vision_active", &api_active), def("vision_targets", &api_targets), def("vision_targets_text", &api_targets_text), def("vision_info", &api_info), def("vision_tune", &api_tune),
                        def("vision_export", &api_export), def("vision_reload", &api_reload),
-                       def("vision_armor_rules", &api_armor_rules)];
+                       def("vision_armor_rules", &api_armor_rules), def("vision_mode", &api_mode), def("vision_set_mode", &api_set_mode), def("vision_sees", &api_sees),
+                       def("vision_modes", &api_modes), def("vision_skip", &api_skip)];
 }

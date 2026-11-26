@@ -2,6 +2,8 @@
 // CRenderTarget::phase_combine after the lens flares, before phase_pp writes the frame out:
 //   1. the ghosts (an invisible bloodsucker) into the heat buffer by their own geometry, depth-tested against the scene
 //      without writing depth: a wall in front hides them as it hides everyone else (no wallhack);
+//      the walls mode only (the user asked for it): the living within its range into the heat buffer's blue, which the
+//      G-buffer leaves at 0, with no depth test - the grade draws a silhouette where a body is but no heat is seen;
 //   2. the HUD layer: the game's quads into $user$pm_vhud (premultiplied RGBA, cleared transparent);
 //   3. the glow: the HUD layer and the heat buffer down to a quarter ($user$pm_vq0: rgb the HUD, a the heat), blurred
 //      twice each way;
@@ -18,6 +20,7 @@ namespace
 ref_rt pm_rt_hud, pm_rt_q0, pm_rt_q1;
 ref_shader pm_s_hud, pm_s_down, pm_s_blur, pm_s_comp;
 ref_shader pm_s_ghost[6]; // skinning -1 .. 4 (the model's own vertex format)
+ref_shader pm_s_wall[6];
 ref_geom pm_g_tl;
 u32 pm_w{}, pm_h{};
 bool pm_failed{};
@@ -50,6 +53,8 @@ void CRenderTarget::pm_vision_free()
     pm_s_hud = nullptr;
     for (ref_shader& s : pm_s_ghost)
         s = nullptr;
+    for (ref_shader& s : pm_s_wall)
+        s = nullptr;
     pm_g_tl = nullptr;
     pm_rt_q1 = nullptr;
     pm_rt_q0 = nullptr;
@@ -80,6 +85,7 @@ void CRenderTarget::phase_pm_vision(CBackend& cmd_list)
         {
             RImplementation.shader_option_skinning(i - 1);
             pm_s_ghost[i].create("pm_vision_ghost");
+            pm_s_wall[i].create("pm_vision_wall");
         }
         RImplementation.shader_option_skinning(-1);
         pm_g_tl.create(FVF::F_TL, RImplementation.Vertex.Buffer(), RImplementation.QuadIB);
@@ -124,6 +130,40 @@ void CRenderTarget::phase_pm_vision(CBackend& cmd_list)
                 c->Render(cmd_list, 1.f, false);
             }
         }
+    }
+
+    // 1b. the walls mode: bodies through walls into the heat buffer's blue (the colour write keeps x and y: the heat seen)
+    if (!V.wall_bodies.empty() && V.walls > 0.f)
+    {
+        PIX_EVENT(pm_vision_walls);
+        u_setrt(cmd_list, rt_heat, nullptr, nullptr, nullptr, rt_Base_Depth->pZRT[cmd_list.context_id]);
+        cmd_list.set_CullMode(CULL_CCW);
+        cmd_list.set_Stencil(FALSE);
+        for (const auto& [R, near_k] : V.wall_bodies)
+        {
+            if (!R || !R->renderable.visual)
+                continue;
+            dxRender_Visual* vis = static_cast<dxRender_Visual*>(R->renderable.visual);
+            FHierrarhyVisual* H = dynamic_cast<FHierrarhyVisual*>(vis);
+            if (!H)
+                continue;
+            if (IKinematics* K = R->renderable.visual->dcast_PKinematics())
+                K->CalculateBones(TRUE);
+            for (dxRender_Visual* c : H->children)
+            {
+                if (!c)
+                    continue;
+                ref_shader& s = pm_s_wall[skin_mode(c) + 1];
+                if (!s || !s->E[0])
+                    continue;
+                cmd_list.set_xform_world(R->renderable.xform);
+                cmd_list.set_Element(s->E[0]);
+                cmd_list.set_ColorWriteEnable(D3DCOLORWRITEENABLE_BLUE);
+                cmd_list.set_c("pm_vwall", near_k, 0.f, 0.f, 0.f);
+                c->Render(cmd_list, 1.f, false);
+            }
+        }
+        cmd_list.set_ColorWriteEnable();
     }
 
     // 2. the HUD layer
@@ -189,6 +229,7 @@ void CRenderTarget::phase_pm_vision(CBackend& cmd_list)
             cmd_list.set_c("pm_v1", V.heat, V.scan, V.grain, V.ca);
             cmd_list.set_c("pm_v2", V.vignette, V.glow, float(V.hud_only), V.hit);
             cmd_list.set_c("pm_v3", V.tint, V.heat_range, float(V.no_hud), 0.f);
+            cmd_list.set_c("pm_v4", V.walls, V.dim, 0.f, 0.f);
         });
         HW.get_context(cmd_list.context_id)->CopyResource(rt_Generic_0->pSurface, rt_Generic_combine->pSurface);
     }

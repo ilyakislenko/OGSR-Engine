@@ -29,10 +29,14 @@ struct portal_mod_vision_frame
     float heat{1.f}; // thermal strength
     float scan{0.22f}, grain{0.12f}, ca{1.f}, vignette{0.35f}, glow{1.6f}, tint{0.66f};
     float heat_range{140.f}; // m: the heat fades out to here
+    float dim{}; // 0..1: the world darkened under the heat (the heat mode)
+    float walls{}; // 0..1: the silhouettes of the living through walls (the walls mode)
     u32 hud_only{}; // 1: the frame is the HUD layer alone over black, its alpha kept (the export)
     u32 no_hud{}; // 1: the frame is graded with no HUD (the plate for the export)
     xr_vector<portal_mod_vision_vert> verts; // quads, 4 a piece in strip order: (x0,y1) (x0,y0) (x1,y1) (x1,y0)
     xr_vector<IRenderable*> ghosts; // stamped into the heat buffer by their own geometry
+    xr_vector<std::pair<IRenderable*, float>> wall_bodies; // the walls mode: into the heat buffer's blue with no depth
+                                                           // test (the float: nearness 0..1)
 };
 
 ENGINE_API extern portal_mod_vision_frame portal_mod_vision;
