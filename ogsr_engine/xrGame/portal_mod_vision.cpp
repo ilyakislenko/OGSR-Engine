@@ -22,6 +22,8 @@
 #include "InventoryOwner.h"
 #include "Inventory.h"
 #include "inventory_item.h"
+#include "PhysicsShellHolder.h"
+#include "../xr_3da/vis_common.h"
 #include "Weapon.h"
 #include "WeaponMagazinedWGrenade.h"
 #include "ai/stalker/ai_stalker.h"
@@ -700,6 +702,42 @@ BOOL see_through(collide::rq_result& r, LPVOID data)
     return vis > 0.25f;
 }
 
+// A big thing that is not alive hides what is behind it as a wall does (the user's honest vision): a car, a BTR, a crate,
+// a slab, a closed door, a broken pole's piece - any physics object over 0.6 m across. Not the living (a man in front
+// does not hide the one behind: the AI's own rule), not items, not anomalies or restrictors (no physics shell), not one
+// the eye is inside (the car the robot drives). The ray is tested against the object's model box turned with it, pulled
+// in by a tenth on each side (a vehicle's skeleton collision has no pickable shapes: take 22's BTR hid nothing by it)
+bool object_cover(const Fvector& from, const Fvector& d, float len)
+{
+    thread_local xr_vector<ISpatial*> near_objs;
+    near_objs.clear();
+    g_SpatialSpace->q_ray(near_objs, 0, STYPE_COLLIDEABLE, from, d, len);
+    for (ISpatial* s : near_objs)
+    {
+        CObject* O = s ? s->dcast_CObject() : nullptr;
+        CGameObject* G = O ? smart_cast<CGameObject*>(O) : nullptr;
+        if (!G || !G->Visual() || smart_cast<CEntityAlive*>(G) || smart_cast<CInventoryItem*>(G) || !smart_cast<CPhysicsShellHolder*>(G) ||
+            G->Radius() < 0.6f)
+            continue;
+        Fbox b = G->Visual()->getVisData().box;
+        Fvector half;
+        b.getradius(half);
+        b.min.mad(half, 0.1f);
+        b.max.mad(half, -0.1f);
+        Fmatrix inv;
+        inv.invert(G->XFORM());
+        Fvector s0, dl, hit;
+        inv.transform_tiny(s0, from);
+        inv.transform_dir(dl, d);
+        dl.normalize_safe();
+        if (b.contains(s0))
+            continue;
+        if (b.Pick(s0, dl, hit) == Fbox::rpOriginOutside && hit.distance_to(s0) < len)
+            return true;
+    }
+    return false;
+}
+
 bool ray_clear(const Fvector& from, const Fvector& to)
 {
     Fvector d;
@@ -712,7 +750,13 @@ bool ray_clear(const Fvector& from, const Fvector& to)
     float vis = 1.f;
     const collide::ray_defs rd(from, d, dist - 0.35f, CDB::OPT_CULL, collide::rqtStatic);
     Level().ObjectSpace.RayQuery(hits, rd, see_through, &vis, nullptr, nullptr);
-    return vis > 0.25f;
+    if (vis <= 0.25f)
+        return false;
+    // the big physics objects (not in a replay: the world stands frozen at its opening there, while its puppets move as
+    // recorded - a live car would hide what the take saw)
+    if (pm_replay::lua_active())
+        return true;
+    return !object_cover(from, d, dist - 0.35f);
 }
 
 //------------------------------------------------------------------------------------------------------------------
