@@ -61,6 +61,7 @@ struct Cfg
     float j_statics[8]{90.f, 1100.f, 600.f, 90.f, 280.f, 180.f, 40.f, 40.f}; // per hit point, statics_build's KINDS order
     float j_statics_other{400.f};
     float j_tree{420.f}, j_piece{300.f}, piece_absorb{0.35f};
+    int piece_steps{8}; // E72c: a piece's energy given in up to this many parts, to the one that breaks it
     float absorb{1.f}, dent_k{1.2e-4f}, keep_s{2.f};
     float glance{0.35f}; // the least share of the speed that counts into a face struck at a slant
     // physics objects
@@ -74,6 +75,13 @@ struct CarRec
     u32 frame{};
     u32 scan{}; // next door scan (ms)
     xr_vector<std::pair<u32, u32>> recent; // (kind << 24 | id, until ms)
+    float mass{}; // E72c: what it rams with, kg ([pm_ram_mass] <its section>, else its physics shell's mass)
+    struct Took
+    {
+        u32 piece, until;
+        float e;
+    };
+    xr_vector<Took> took; // E72c: the most energy each building piece took from it lately (J)
 };
 
 struct Contact // a car's contact with a physics object (physics thread -> main thread)
@@ -125,6 +133,7 @@ void load_cfg()
     C.j_tree = cfg_f(s, "j_tree", C.j_tree);
     C.j_piece = cfg_f(s, "j_piece", C.j_piece);
     C.piece_absorb = cfg_f(s, "piece_absorb", C.piece_absorb);
+    C.piece_steps = _max(1, (int)cfg_f(s, "piece_steps", (float)C.piece_steps));
     C.absorb = cfg_f(s, "absorb", C.absorb);
     C.dent_k = cfg_f(s, "dent_k", C.dent_k);
     C.keep_s = cfg_f(s, "keep_s", C.keep_s);
@@ -353,6 +362,17 @@ Fvector closest_on_tri(const Fvector& p, const Fvector& a, const Fvector& b, con
 
 // the car pays: its speed (the shell's every element), and a dent - a strike hit on itself, which pm_car's crash rule
 // (who = the car) cuts and keeps above a third of its health
+// E72c: the mass a car rams with: its shell's own (the model's bones) unless [pm_ram_mass] names its section - the BTR's
+// shell weighs 6830 kg, the real BTR-80 13.6 t
+float car_mass(CCar* car)
+{
+    auto it = S.cars.find(car->ID());
+    if (it != S.cars.end() && it->second.mass > 0.f)
+        return it->second.mass;
+    CPhysicsShell* sh = car->PPhysicsShell();
+    return sh ? _max(sh->getMass(), 1.f) : 1.f;
+}
+
 float pay(CCar* car, float E, float cost, const Fvector& dir)
 {
     CPhysicsShell* sh = car->PPhysicsShell();
@@ -501,7 +521,7 @@ void tear_door(CCar* car, CPhysicObject* o, const Contact& ct)
     w.random_dir().mul(::Random.randF(1.f, 3.f));
     leaf->set_AngularVel(w);
     // the car pays the leaf's momentum and a dent
-    const float M = _max(car->PPhysicsShell()->getMass(), 1.f);
+    const float M = car_mass(car);
     const float E = 0.5f * M * v0.square_magnitude();
     const float cost = 0.5f * m * lv.square_magnitude() * 0.5f;
     const float s0 = v0.magnitude();
@@ -521,7 +541,7 @@ void hit_prop(CCar* car, CPhysicObject* o, const Contact& ct)
     CPhysicsShell* sh = o->PPhysicsShell();
     if (!sh)
         return;
-    const float M = _max(car->PPhysicsShell()->getMass(), 1.f), m = _max(sh->getMass(), 0.5f);
+    const float M = car_mass(car), m = _max(sh->getMass(), 0.5f);
     const float mu = M * m / (M + m);
     const float E = 0.5f * mu * ct.vn * ct.vn;
     // its material and whether E57 breaks it: props_near's record of it
@@ -679,7 +699,7 @@ void sweep(CCar* car, CarRec& r)
     if (cand.empty())
         return;
     std::sort(cand.begin(), cand.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
-    const float mass = _max(sh->getMass(), 50.f);
+    const float mass = _max(r.mass > 0.f ? r.mass : sh->getMass(), 50.f);
     float E = 0.5f * mass * speed * speed; // what the car has left for the things ahead this frame
     const bool dbg = C.debug;
     const u16 m_trunk = GMLib.GetMaterialIdx("materials\\tree_trunk");
@@ -712,29 +732,75 @@ void sweep(CCar* car, CarRec& r)
         if (_abs(c.n.y) > 0.75f) // a floor, a slab's top, the road: driven on, never rammed
             continue;
         const CDB::TRI& t = T[c.tri];
+        if (V[t.verts[0]].y < -5000.f) // its piece broke a moment ago (E54 sinks a broken piece's faces)
+            continue;
         const float sp_now = _sqrt(2.f * E / mass);
         const Fvector vnow = Fvector(v).mul(sp_now / speed);
-        // 1. a destructible building's piece (E54: the construction site, the ramming walls)
-        const int pc = portal_mod_destruct::lua_piece_at(c.p);
-        if (pc >= 0 && portal_mod_destruct::lua_piece_state(pc) == 0 && portal_mod_destruct::lua_piece_pos(pc).distance_to(c.p) < 2.2f)
+        // 1. a destructible building's piece (E54: the construction site, the ramming walls). The piece that owns the face:
+        // looked up inside its box - the face's middle 10 cm behind it. A point on the face is in the neighbour's box
+        // too (pieces touch, their boxes grown 5 cm) and lua_piece_at takes the first: the hits went to pieces the car
+        // was not pushing on (E72a, ram_btr_05..09: a piece "held" 937 of damage). The level's own faces (a building's
+        // frame: destruct_wall_probe below 10) are no piece at all.
+        Fvector mid;
+        mid.add(V[t.verts[0]], V[t.verts[1]]).add(V[t.verts[2]]).div(3.f);
+        Fvector probe_from, probe_back, inside;
+        probe_from.mad(mid, c.n, 0.3f);
+        probe_back.mad(mid, c.n, -0.3f);
+        inside.mad(mid, c.n, -0.1f);
+        // both ways: a ray meets a face from its front only
+        const bool piece_face = portal_mod_destruct::lua_wall_probe(probe_from, Fvector(c.n).invert(), 0.6f).z >= 10.f ||
+            portal_mod_destruct::lua_wall_probe(probe_back, c.n, 0.6f).z >= 10.f;
+        const int pc = piece_face ? portal_mod_destruct::lua_piece_at(inside) : -1;
+        // (a big slab's middle may be 2-4 m from the point it is struck at; lua_piece_at's fallback, the nearest piece
+        // within 3 m of a point in no box, is ruled out by this)
+        if (pc >= 0 && portal_mod_destruct::lua_piece_state(pc) == 0 && portal_mod_destruct::lua_piece_pos(pc).distance_to(inside) < 4.5f)
         {
-            if (recent(r, K_PIECE, (u32)pc))
-                continue;
-            remember(r, K_PIECE, (u32)pc);
-            ++S.tried[K_PIECE];
             const float vf = face_speed(vnow, sp_now, c.n, false);
             const float Ef = _min(E, 0.5f * mass * vf * vf);
-            SBullet bl;
-            bl.dir = dw;
-            bl.speed = bl.max_speed = 1.f;
-            bl.pm_destruct = Ef / _max(C.j_piece, 1.f);
-            portal_mod_destruct::bullet_hit(bl, c.tri, c.p, c.n, u16(t.material));
-            const bool gone = portal_mod_destruct::lua_piece_state(pc) != 0;
+            // E72c: a piece takes from a car only what is more than it took lately: the first face weighed is often a side
+            // one struck at a slant (glance), and with the piece held after it, its front, struck square, was never weighed -
+            // the BTR stood on it (ram_btr_05..11)
+            float had = 0.f;
+            const u32 now = Device.dwTimeGlobal;
+            r.took.erase(std::remove_if(r.took.begin(), r.took.end(), [now](const CarRec::Took& q) { return q.until <= now; }), r.took.end());
+            CarRec::Took* tk = nullptr;
+            for (auto& q : r.took)
+                if (q.piece == (u32)pc)
+                    tk = &q;
+            if (tk)
+                had = tk->e;
+            if (Ef <= had * 1.1f + 300.f)
+                continue;
+            if (!tk)
+            {
+                r.took.push_back({(u32)pc, 0, 0.f});
+                tk = &r.took.back();
+            }
+            tk->until = now + u32(C.keep_s * 1000.f);
+            tk->e = Ef;
+            ++S.tried[K_PIECE];
+            // the energy given in parts, up to the part that breaks it: the car pays what breaking it took, not all it had.
+            // The damage goes to the face's owner (E54's piece_of_tri); broken, its faces leave the collision (E54's sink)
+            const int steps = C.piece_steps;
+            const float part = (Ef - had) / float(steps);
+            float used = 0.f;
+            bool gone = false;
+            for (int k = 0; k < steps && !gone; ++k)
+            {
+                SBullet bl;
+                bl.dir = dw;
+                bl.speed = bl.max_speed = 1.f;
+                bl.pm_destruct = part / _max(C.j_piece, 1.f);
+                portal_mod_destruct::bullet_hit(bl, c.tri, c.p, c.n, u16(t.material));
+                used += part;
+                gone = V[t.verts[0]].y < -5000.f || portal_mod_destruct::lua_piece_state(pc) != 0;
+            }
             if (dbg)
-                Msg("[ram] piece %d: %.1f kJ into it (%.0f of damage) -> %s", pc, Ef * 0.001f, bl.pm_destruct, gone ? "broken" : "holds");
+                Msg("[ram] piece %d: %.1f kJ of %.1f into it (had %.1f, %.0f of damage) -> %s", pc, used * 0.001f, Ef * 0.001f, had * 0.001f,
+                    used / _max(C.j_piece, 1.f), gone ? "broken" : "holds");
             if (gone)
             {
-                const float cost = Ef * C.piece_absorb;
+                const float cost = used * C.piece_absorb; // (what it took before, held, the car's own physics paid: it slowed on it)
                 const float s0 = sp_now;
                 const float k = pay(car, E, cost, dw);
                 E *= k * k;
@@ -845,8 +911,9 @@ void car_update(CCar* car)
     {
         r.shell = sh;
         sh->add_ObjectContactCallback(&obj_contact);
+        r.mass = cfg_f("pm_ram_mass", car->cNameSect().c_str(), sh->getMass());
         if (C.debug)
-            Msg("[ram] %s (%u): watching its contacts (%.0f kg)", car->cName().c_str(), car->ID(), sh->getMass());
+            Msg("[ram] %s (%u): watching its contacts (%.0f kg, rams with %.0f)", car->cName().c_str(), car->ID(), sh->getMass(), r.mass);
     }
     if (!is_on())
     {
