@@ -11,6 +11,7 @@
 #include "portal_mod_vision.h"
 #include "../xr_3da/portal_mod_vision_shared.h"
 #include "portal_mod_replay.h"
+#include "portal_mod_reboot.h"
 #include "Level.h"
 #include "Actor.h"
 #include "entity_alive.h"
@@ -221,6 +222,7 @@ float g_actor_hp{-1.f};
 float g_suit_prev{-1.f}; // the outfit's condition a frame ago (an armoured hit wears the suit, not the health)
 int g_hits{}; // hits taken since it was switched on (the damage panel)
 float g_dmg{}; // health lost since then, 0..1
+bool g_rebooting{}; // E74's reboot under way: the vision steps aside
 float g_hit_t{-100.f}; // g_now of the last hit
 float g_suit0{-1.f}; // the outfit's condition when it was switched on
 float g_replay_t{-1.f};
@@ -1103,7 +1105,7 @@ void draw_chrome(float a)
         const float k = ease(since / 0.4f);
         text(110.f * S, 849.f * S, fmt("%s ...... %4d", T("dmg_hits", "HITS"), g_hits).c_str(), F_LBL, pc);
         text(110.f * S, 877.f * S, fmt("%s ..... %4.1f%%", T("dmg_suit", "SUIT"), suit * 100.f * k).c_str(), F_LBL, pc);
-        text(110.f * S, 905.f * S, fmt("%s ..... %4.2f%%", T("dmg_endo", "ENDOSKELETON"), g_dmg * 100.f * k).c_str(), F_LBL, pc);
+        text(110.f * S, 905.f * S, fmt("%s ..... %4.2f%%", T("dmg_endo", "ENDOSKELETON"), std::min(g_dmg, 1.f) * 100.f * k).c_str(), F_LBL, pc);
         const float tx = 481.f * S, tyy = 851.f * S;
         seg(tx, tyy + 8.f * S, tx + 7.f * S, tyy + 4.f * S, 2.f * S, rgba(C.col, pa));
         seg(tx, tyy + 8.f * S, tx + 7.f * S, tyy + 12.f * S, 2.f * S, rgba(C.col, pa));
@@ -1269,6 +1271,31 @@ void before_render()
     rdt = clampr(rdt, 0.f, 0.1f);
     if (!g_switch)
         g_active = false;
+    // E74's reboot owns the screen while it runs (its BIOS lines, its own red vision, its diagnostics): this layer steps
+    // aside and the game's HUD is left as the reboot keeps it; the held zero health and the rise's are no damage; the
+    // vision boots again when he is up
+    const bool rebooting = portal_mod_reboot::active();
+    if (rebooting != g_rebooting)
+    {
+        g_rebooting = rebooting;
+        if (!rebooting && g_active)
+        {
+            g_boot = 0.f;
+            g_glitch = 1.f;
+            log_add(T("log_boot", "MACHINE VISION ONLINE"));
+        }
+    }
+    if (rebooting)
+    {
+        g_fade = 0.f;
+        if (CActor* me = Actor())
+        {
+            g_actor_hp = me->GetfHealth();
+            g_suit_prev = me->GetOutfit() ? me->GetOutfit()->GetCondition() : -1.f;
+        }
+        V.on = false;
+        return;
+    }
     sync_game_hud();
     // the fade: up in 0.35 s, down in 0.3 s
     g_fade = g_active ? std::min(1.f, g_fade + rdt / 0.35f) : std::max(0.f, g_fade - rdt / 0.3f);
@@ -1308,7 +1335,9 @@ void before_render()
         const float hp = me->GetfHealth();
         CCustomOutfit* suit = me->GetOutfit();
         const float sc = suit ? suit->GetCondition() : -1.f;
-        const bool hp_hit = g_actor_hp >= 0.f && hp < g_actor_hp - 0.002f;
+        // more than half the health in one frame is no round on the armour: a jump of the game's time (hunger) or the like
+        const bool jump = g_actor_hp >= 0.f && hp < g_actor_hp - 0.5f;
+        const bool hp_hit = g_actor_hp >= 0.f && hp < g_actor_hp - 0.002f && !jump;
         const bool suit_hit = sc >= 0.f && g_suit_prev >= 0.f && sc < g_suit_prev - 0.0004f;
         if ((hp_hit || suit_hit) && !pm_replay::lua_active())
         {
@@ -1326,7 +1355,7 @@ void before_render()
                 g_hit_t = g_now;
             }
         }
-        else if (g_active && g_actor_hp >= 0.f && hp < g_actor_hp && !pm_replay::lua_active())
+        else if (g_active && g_actor_hp >= 0.f && hp < g_actor_hp && !jump && !pm_replay::lua_active())
             g_dmg += g_actor_hp - hp; // the armour's crumbs of a bullet, a bleed: the endoskeleton's count
         g_actor_hp = hp;
         g_suit_prev = sc;
