@@ -7,6 +7,7 @@
 ////////////////////////////////////////////////////////////////////////////
 
 #include "stdafx.h"
+#include "portal_mod_reboot.h" // portal-mod E74: a reboot instead of the death
 #include "level.h"
 #include "actor.h"
 #include "script_game_object.h"
@@ -31,9 +32,14 @@
 #include "portal_mod.h" // portal-mod E10
 #include "portal_mod_replay.h" // portal-mod E53
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_wounds.h" // portal-mod E71: NPC wounds by body part
+#include "portal_mod_dualaim.h" // portal-mod E70: dual wield split targeting
 #include "portal_mod_features.h" // portal-mod E55: My Mods' switches
+#include "portal_mod_ram.h" // portal-mod E72: vehicles break what they ram
 #include "portal_mod_props.h" // portal-mod E57: breakable props
 #include "portal_mod_trees.h" // portal-mod E58: falling trees
+#include "portal_mod_statics.h" // portal-mod E59: poles, fences, lamps
+#include "portal_mod_craters.h" // portal-mod E60: craters in the ground
 #include "Car.h"
 #include "helicopter.h"
 #include "phworld.h"
@@ -1728,6 +1734,8 @@ void portal_mod_feature_eject(CActor* a)
 
 static void pm_feature_set(LPCSTR name, bool on)
 {
+    if (portal_mod_ram::feature_set(name, on)) // portal-mod E72: "ram" is the ramming's own switch
+        return;
     const int i = portal_mod_feat::index(name);
     if (i < 0)
         return;
@@ -1740,6 +1748,8 @@ static void pm_feature_set(LPCSTR name, bool on)
 
 static bool pm_feature(LPCSTR name)
 {
+    if (name && !xr_strcmp(name, "ram")) // portal-mod E72
+        return portal_mod_ram::enabled();
     const int i = portal_mod_feat::index(name);
     return i < 0 || portal_mod_feat::on[i];
 }
@@ -1756,9 +1766,13 @@ static bool pm_use_holder(u16 id)
     return h && pm_actor_access::use(a, h);
 }
 
+void pm_lights_script_register(lua_State* L); // portal-mod E75: level.lights_* (portal_mod_lights.cpp)
 void pm_vision_script_register(lua_State* L); // portal-mod E76: level.vision_* (portal_mod_vision.cpp)
 void CLevel::script_register(lua_State* L)
 {
+    pm_lights_script_register(L); // portal-mod E75
+    pm_wounds_script_register(L); // portal-mod E71: level.pm_wound_*
+    pm_dualaim_script_register(L); // portal-mod E70: level.dual_aim_*
     pm_vision_script_register(L); // portal-mod E76
     module(L)[class_<CEnvDescriptor>("CEnvDescriptor")
                   .def_readwrite("fog_density", &CEnvDescriptor::fog_density)
@@ -1917,7 +1931,14 @@ void CLevel::script_register(lua_State* L)
             def("props_debug", &portal_mod_props::lua_debug), // portal-mod E57b: a log line for each hit on a prop
             def("trees_info", &portal_mod_trees::lua_info), def("trees_near", &portal_mod_trees::lua_near), // portal-mod E58
             def("trees_fell", &portal_mod_trees::lua_fell), def("trees_debug", &portal_mod_trees::lua_debug),
+            def("statics_info", &portal_mod_statics::lua_info), def("statics_near", &portal_mod_statics::lua_near), // portal-mod E59
+            def("statics_break", &portal_mod_statics::lua_break), def("statics_debug", &portal_mod_statics::lua_debug),
+            def("statics_probe", &portal_mod_statics::lua_probe), // portal-mod E59b: the level's collision in its box
+            def("craters_info", &portal_mod_craters::lua_info), def("craters_depth_at", &portal_mod_craters::lua_depth_at), // portal-mod E60
+            def("craters_make", &portal_mod_craters::lua_make), def("craters_ground", &portal_mod_craters::lua_ground),
             def("pm_feature_set", &pm_feature_set), def("pm_feature", &pm_feature), def("pm_use_holder", &pm_use_holder), // portal-mod E55
+            def("ram_info", &portal_mod_ram::lua_info), def("ram_events", &portal_mod_ram::lua_events), // portal-mod E72
+            def("ram_debug", &portal_mod_ram::lua_debug),
             // portal-mod E53: the replay for filming (portal_mod_replay.cpp)
             def("replay_record", &pm_replay::lua_record), def("replay_recording", &pm_replay::lua_recording), def("replay_ring", &pm_replay::lua_ring),
             def("replay_save_ring", &pm_replay::lua_save_ring), def("replay_open", &pm_replay::lua_open_take), def("replay_close", &pm_replay::lua_close),
@@ -1966,6 +1987,7 @@ void CLevel::script_register(lua_State* L)
                                  def("get_actor_ranking", &get_actor_ranking)];
 
     module(L)[def("command_line", &command_line)];
+    portal_mod_reboot::script_register(L); // portal-mod E74: level.pm_reboot_*
 
     module(L, "relation_registry")[def("community_goodwill", &g_community_goodwill), def("set_community_goodwill", &g_set_community_goodwill),
                                    def("change_community_goodwill", &g_change_community_goodwill), def("get_personal_goodwill", &g_get_personal_goodwill),

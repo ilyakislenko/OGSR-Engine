@@ -1947,10 +1947,17 @@
     <ClCompile Include="GamePersistent.cpp" />
     <ClCompile Include="Level.cpp" />
     <ClCompile Include="portal_mod_replay.cpp" /><!-- portal-mod E53 -->
+    <ClCompile Include="portal_mod_reboot.cpp" /><!-- portal-mod E74 -->
     <ClCompile Include="portal_mod_vision.cpp" /><!-- portal-mod E76 -->
+    <ClCompile Include="portal_mod_dualaim.cpp" /><!-- portal-mod E70 -->
     <ClCompile Include="portal_mod_destruct.cpp" /><!-- portal-mod E54 -->
+    <ClCompile Include="portal_mod_wounds.cpp" /><!-- portal-mod E71 -->
     <ClCompile Include="portal_mod_props.cpp" /><!-- portal-mod E57 -->
+    <ClCompile Include="portal_mod_ram.cpp" /><!-- portal-mod E72 -->
     <ClCompile Include="portal_mod_trees.cpp" /><!-- portal-mod E58 -->
+    <ClCompile Include="portal_mod_lights.cpp" /><!-- portal-mod E75 -->
+    <ClCompile Include="portal_mod_statics.cpp" /><!-- portal-mod E59 -->
+    <ClCompile Include="portal_mod_craters.cpp" /><!-- portal-mod E60 -->
     <ClCompile Include="Level_input.cpp" />
     <ClCompile Include="Level_load.cpp" />
     <ClCompile Include="Level_network.cpp" />

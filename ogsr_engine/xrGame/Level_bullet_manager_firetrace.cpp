@@ -20,6 +20,7 @@
 #include "weapon.h"
 #include "ai/monsters/BaseMonster/base_monster.h"
 #include "portal_mod_destruct.h" // portal-mod E54
+#include "portal_mod_lights.h" // portal-mod E75
 
 //константы shoot_factor, определяющие
 //поведение пули при столкновении с объектом
@@ -278,6 +279,7 @@ void CBulletManager::StaticObjectHit(CBulletManager::_event& E)
 static bool g_clear = false;
 void CBulletManager::DynamicObjectHit(CBulletManager::_event& E)
 {
+    portal_mod_lights::dynamic_hit(E.R.O, (u16)E.R.element, E.point, E.bullet.dir, E.bullet.parent_id, E.bullet.weapon_id); // portal-mod E75
     //только для динамических объектов
     VERIFY(E.R.O);
     if (g_clear)
