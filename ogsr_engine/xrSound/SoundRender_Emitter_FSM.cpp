@@ -223,16 +223,18 @@ void CSoundRender_Emitter::update(float dt)
             fTimeStarted = SoundRender->fTimer_Value - fPastTime;
             fTimeToPropagade = fTimeStarted; //--> For AI events
 
+            // portal-mod E53e: a start before the timer's zero is a start in the past like any other - the E53 replay
+            // rewinds a long sound at x0.25 (rewind / pitch) soon after the game is up. Every use of fTimeStarted is
+            // a difference from the timer, so it is kept; the assert here was fatal.
             if (fTimeStarted < 0.0f)
             {
-                //Log("fTimer_Value = ", SoundRender->fTimer_Value);
-                //Log("fTimeStarted = ", fTimeStarted);
-                //Log("fRemainingTime = ", fRemainingTime);
-                //Log("fPastTime = ", fPastTime);
-                R_ASSERT2(fTimeStarted >= 0.0f, "Possible error in sound rewind logic! See log.");
-
-                fTimeStarted = SoundRender->fTimer_Value;
-                fTimeToPropagade = fTimeStarted;
+                static bool s_logged = false;
+                if (!s_logged)
+                {
+                    s_logged = true;
+                    Msg("~ [portal_mod] a sound rewound %.2f s at pitch %.2f with the timer at %.2f s: its start before the timer's zero kept",
+                        fTimeToRewind, p_source.freq, SoundRender->fTimer_Value);
+                }
             }
 
             if (!bLooped)
